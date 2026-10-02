@@ -1,0 +1,203 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  BARBER
+  CUSTOMER
+}
+
+enum AppointmentStatus {
+  CONFIRMED
+  CHECKED_IN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  LATE
+  NO_SHOW
+  RESCHEDULED
+}
+
+enum PaymentMethod {
+  ONLINE
+  PAY_AT_SHOP
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum NotificationType {
+  BOOKING_CONFIRMED
+  APPOINTMENT_REMINDER
+  APPOINTMENT_CANCELLED
+  APPOINTMENT_RESCHEDULED
+  PAYMENT_SUCCESSFUL
+  PAYMENT_FAILED
+  STATUS_CHANGED
+  LATE_STATUS
+  NO_SHOW_STATUS
+}
+
+model User {
+  id           String           @id @default(uuid())
+  email        String           @unique
+  passwordHash String
+  role         Role             @default(CUSTOMER)
+  isActive     Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  customerProfile CustomerProfile?
+  barberProfile   Barber?
+  notifications   Notification[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model CustomerProfile {
+  id           String        @id @default(uuid())
+  userId       String        @unique
+  fullName     String
+  phone        String
+  profileImage String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@index([userId])
+}
+
+model Barber {
+  id           String               @id @default(uuid())
+  userId       String               @unique
+  fullName     String
+  phone        String
+  profileImage String?
+  isActive     Boolean              @default(true)
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  availability BarberAvailability[]
+  appointments Appointment[]
+
+  @@index([userId])
+  @@index([isActive])
+}
+
+model Service {
+  id              String        @id @default(uuid())
+  name            String
+  description     String
+  price           Float         // Stored as ETB
+  durationMinutes Int
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  appointments    Appointment[]
+
+  @@index([isActive])
+}
+
+model BusinessSchedule {
+  id        String   @id @default(uuid())
+  dayOfWeek Int      @unique // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+  isOpen    Boolean  @default(true)
+  openTime  String   // e.g. "08:30" (24h HH:mm)
+  closeTime String   // e.g. "19:30" (24h HH:mm)
+}
+
+model BarberAvailability {
+  id        String   @id @default(uuid())
+  barberId  String
+  dayOfWeek Int      // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+  startTime String   // e.g. "09:00"
+  endTime   String   // e.g. "17:00"
+
+  barber    Barber   @relation(fields: [barberId], references: [id], onDelete: Cascade)
+
+  @@unique([barberId, dayOfWeek])
+  @@index([barberId])
+}
+
+model Appointment {
+  id                      String            @id @default(uuid())
+  customerId              String
+  barberId                String
+  serviceId               String
+  appointmentDate         String            // e.g. "2026-10-02"
+  startTime               String            // e.g. "10:30"
+  endTime                 String            // e.g. "11:00"
+  startAt                 DateTime          // Timestamp for exact conflict and overlap queries
+  endAt                   DateTime          // Timestamp for exact conflict and overlap queries
+  status                  AppointmentStatus @default(CONFIRMED)
+  paymentMethod           PaymentMethod     @default(PAY_AT_SHOP)
+  paymentStatus           PaymentStatus     @default(PENDING)
+  notes                   String?
+
+  // Snapshot fields at booking time to preserve historical integrity
+  serviceNameSnapshot     String
+  servicePriceSnapshot    Float
+  serviceDurationSnapshot Int
+
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+
+  customer                CustomerProfile   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  barber                  Barber            @relation(fields: [barberId], references: [id], onDelete: Restrict)
+  service                 Service           @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  payments                Payment[]
+
+  @@index([customerId])
+  @@index([barberId])
+  @@index([serviceId])
+  @@index([startAt, endAt])
+  @@index([appointmentDate])
+  @@index([status])
+}
+
+model Payment {
+  id                   String        @id @default(uuid())
+  appointmentId        String
+  amount               Float         // ETB
+  method               PaymentMethod
+  status               PaymentStatus @default(PENDING)
+  provider             String        @default("MANUAL") // "GREY", "MANUAL", etc.
+  transactionReference String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  appointment          Appointment   @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([appointmentId])
+  @@index([status])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  title     String
+  message   String
+  type      NotificationType
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+}
