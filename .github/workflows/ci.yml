@@ -11,6 +11,11 @@ jobs:
     name: Lint, Test, & Build Verification
     runs-on: ubuntu-latest
 
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/barber_shop_db?schema=public
+      JWT_SECRET: test_super_secret_jwt_key_32_characters_long_1234
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -47,8 +52,4 @@ jobs:
 
       - name: Run Backend Test Suite
         working-directory: ./backend
-        env:
-          NODE_ENV: test
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/barber_shop_db?schema=public
-          JWT_SECRET: test_super_secret_jwt_key_32_characters_long_1234
         run: npm test
