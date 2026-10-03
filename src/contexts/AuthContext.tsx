@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import type { User, CustomerProfile, Barber, Role } from '../types';
+import type { User, CustomerProfile, Barber, Role, Membership } from '../types';
 import { authApi } from '../api/auth.api';
 
 interface AuthContextType {
@@ -7,6 +7,8 @@ interface AuthContextType {
   profile: CustomerProfile | Barber | null;
   token: string | null;
   isLoading: boolean;
+  activeTenantId: string | null;
+  memberships: Membership[];
   login: (email: string, password: string) => Promise<{ success: boolean; message: string }>;
   register: (data: {
     fullName: string;
@@ -17,7 +19,8 @@ interface AuthContextType {
   }) => Promise<{ success: boolean; message: string }>;
   logout: () => void;
   refreshUser: () => Promise<void>;
-  hasRole: (role: Role) => boolean;
+  hasRole: (...roles: Role[]) => boolean;
+  isSuperAdmin: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -58,7 +61,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 );
               }
             } catch {
-              // Token may be invalid or expired
+              // Token is invalid, revoked, or expired - clear stale session
+              localStorage.removeItem(STORAGE_KEY);
+              setUser(null);
+              setProfile(null);
+              setToken(null);
             }
           }
         }
@@ -168,8 +175,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const hasRole = (role: Role): boolean => {
-    return user?.role === role;
+  const isSuperAdmin = user?.platformRole === 'SUPER_ADMIN' || user?.role === 'SUPER_ADMIN';
+
+  const hasRole = (...roles: Role[]): boolean => {
+    if (!user) return false;
+    if (isSuperAdmin) return true;
+
+    // Normalizing legacy ADMIN to include SHOP_OWNER
+    let allowed = [...roles];
+    if (roles.includes('ADMIN')) {
+      allowed.push('SUPER_ADMIN', 'SHOP_OWNER');
+    }
+
+    return allowed.includes(user.role) || (user.platformRole ? allowed.includes(user.platformRole) : false);
   };
 
   return (
@@ -179,11 +197,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile,
         token,
         isLoading,
+        activeTenantId: user?.activeTenantId || null,
+        memberships: user?.memberships || [],
         login,
         register,
         logout,
         refreshUser,
         hasRole,
+        isSuperAdmin,
       }}
     >
       {children}

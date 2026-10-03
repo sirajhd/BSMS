@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import {
   Scissors,
   LayoutDashboard,
@@ -13,10 +14,13 @@ import {
   X,
   ShieldCheck,
   FileSpreadsheet,
+  Settings,
+  ExternalLink,
 } from 'lucide-react';
 
 export const AdminLayout: React.FC = () => {
-  const { profile, logout } = useAuth();
+  const { user, profile, logout, isSuperAdmin } = useAuth();
+  const { tenant } = useTenant();
   const navigate = useNavigate();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -28,7 +32,9 @@ export const AdminLayout: React.FC = () => {
   const adminName =
     profile && 'fullName' in profile && profile.fullName
       ? profile.fullName
-      : 'System Administrator';
+      : user?.email?.split('@')[0] || 'Administrator';
+
+  const shopName = tenant?.name || 'Crown & Blade';
 
   const navItems = [
     { label: 'Executive KPIs', path: '/admin/dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
@@ -37,6 +43,7 @@ export const AdminLayout: React.FC = () => {
     { label: 'All Appointments', path: '/admin/appointments', icon: <CalendarCheck className="w-4 h-4" /> },
     { label: 'Business Hours', path: '/admin/schedule', icon: <Clock className="w-4 h-4" /> },
     { label: 'Financial Reports', path: '/admin/reports', icon: <FileSpreadsheet className="w-4 h-4" /> },
+    { label: 'Shop Settings', path: '/admin/settings', icon: <Settings className="w-4 h-4" /> },
   ];
 
   return (
@@ -47,10 +54,10 @@ export const AdminLayout: React.FC = () => {
           <div className="w-10 h-10 rounded-xl bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center shrink-0">
             <Scissors className="w-5 h-5" />
           </div>
-          <div>
-            <span className="font-extrabold text-base tracking-tight block">Crown & Blade</span>
+          <div className="min-w-0">
+            <span className="font-extrabold text-base tracking-tight block truncate">{shopName}</span>
             <span className="text-[10px] text-amber-500 font-bold uppercase tracking-wider block -mt-0.5">
-              Admin Console
+              {tenant?.slug ? `${tenant.slug}.bsms.com` : 'Shop Management'}
             </span>
           </div>
         </div>
@@ -74,6 +81,18 @@ export const AdminLayout: React.FC = () => {
           ))}
         </nav>
 
+        {isSuperAdmin && (
+          <div className="p-3 border-t border-neutral-800/60">
+            <Link
+              to="/platform/dashboard"
+              className="flex items-center justify-between px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-bold hover:bg-amber-500/20 transition"
+            >
+              <span>Platform Super Admin</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </Link>
+          </div>
+        )}
+
         <div className="p-4 border-t border-neutral-800 flex items-center justify-between">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="w-8 h-8 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center text-amber-500 shrink-0">
@@ -81,7 +100,9 @@ export const AdminLayout: React.FC = () => {
             </div>
             <div className="min-w-0">
               <span className="text-xs font-bold text-neutral-200 block truncate">{adminName}</span>
-              <span className="text-[10px] text-neutral-500 block">Owner / Admin</span>
+              <span className="text-[10px] text-amber-500 font-semibold block uppercase">
+                {user?.role || 'Shop Owner'}
+              </span>
             </div>
           </div>
           <button
@@ -97,11 +118,11 @@ export const AdminLayout: React.FC = () => {
 
       {/* Mobile Top Header */}
       <div className="md:hidden border-b border-neutral-800 bg-neutral-900/90 px-4 h-16 flex items-center justify-between sticky top-0 z-30">
-        <Link to="/admin/dashboard" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center">
+        <Link to="/admin/dashboard" className="flex items-center gap-2 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center shrink-0">
             <Scissors className="w-4 h-4" />
           </div>
-          <span className="font-bold text-sm">Crown & Blade Admin</span>
+          <span className="font-bold text-sm truncate">{shopName}</span>
         </Link>
         <button
           type="button"
@@ -133,6 +154,15 @@ export const AdminLayout: React.FC = () => {
               <span>{item.label}</span>
             </NavLink>
           ))}
+          {isSuperAdmin && (
+            <Link
+              to="/platform/dashboard"
+              className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-bold text-amber-400 bg-amber-500/10"
+            >
+              <span>Platform Super Admin</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </Link>
+          )}
           <div className="pt-2 border-t border-neutral-800 flex justify-end">
             <button
               type="button"

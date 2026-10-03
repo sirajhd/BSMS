@@ -7,7 +7,13 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().default(5000),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
-  JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters long'),
+  JWT_SECRET: z
+    .string()
+    .min(16, 'JWT_SECRET must be at least 16 characters long')
+    .refine(
+      (val) => process.env.NODE_ENV !== 'production' || val.length >= 32,
+      'JWT_SECRET must be at least 32 characters long in production'
+    ),
   FRONTEND_URL: z.string().default('http://localhost:5173'),
   UPLOAD_DIR: z.string().default('uploads'),
 });

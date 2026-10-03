@@ -11,9 +11,9 @@ const updatePaymentStatusSchema = z.object({
 });
 
 export class PaymentController {
-  static async getAllPayments(_req: Request, res: Response, next: NextFunction) {
+  static async getAllPayments(req: Request, res: Response, next: NextFunction) {
     try {
-      const payments = await PaymentService.getAllPayments();
+      const payments = await PaymentService.getAllPayments(req.tenantId);
       return sendSuccess(res, 'Payments ledger fetched successfully.', payments);
     } catch (err) {
       next(err);
@@ -23,7 +23,7 @@ export class PaymentController {
   static async getByAppointmentId(req: Request, res: Response, next: NextFunction) {
     try {
       const user = req.user!;
-      const payment = await PaymentService.getPaymentByAppointmentId(req.params.appointmentId);
+      const payment = await PaymentService.getPaymentByAppointmentId(req.params.appointmentId, req.tenantId);
 
       if (user.role === Role.CUSTOMER && payment.appointment.customerId !== user.customerId) {
         throw new AppError('Forbidden. You do not have permission to view this payment record.', 403, 'FORBIDDEN');
@@ -46,7 +46,7 @@ export class PaymentController {
 
       // Verify ownership if caller is BARBER
       if (user.role === Role.BARBER) {
-        const payment = await PaymentService.getPaymentById(req.params.id);
+        const payment = await PaymentService.getPaymentById(req.params.id, req.tenantId);
         if (payment.appointment.barberId !== user.barberId) {
           throw new AppError('Forbidden. You can only update payments for your assigned appointments.', 403, 'FORBIDDEN');
         }
@@ -55,7 +55,9 @@ export class PaymentController {
       const updated = await PaymentService.updatePaymentStatus(
         req.params.id,
         status as PaymentStatus,
-        transactionReference
+        transactionReference,
+        req.tenantId,
+        user.id
       );
       return sendSuccess(res, 'Payment status updated successfully.', updated);
     } catch (err) {

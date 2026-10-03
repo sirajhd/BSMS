@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useTenant } from '../../contexts/TenantContext';
 import { Button } from '../../components/common/Button';
 import { Input } from '../../components/common/Input';
 import { Card } from '../../components/common/Card';
-import { Eye, EyeOff, Lock, Mail, Scissors, AlertCircle } from 'lucide-react';
+import { Eye, EyeOff, Lock, Mail, Scissors, AlertCircle, ShieldCheck } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login } = useAuth();
+  const { login, user } = useAuth();
+  const { tenant } = useTenant();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -41,9 +43,11 @@ export const LoginPage: React.FC = () => {
     if (from) {
       navigate(from, { replace: true });
     } else {
-      if (email.includes('admin')) {
+      if (email.includes('superadmin') || user?.role === 'SUPER_ADMIN' || user?.platformRole === 'SUPER_ADMIN') {
+        navigate('/platform/dashboard', { replace: true });
+      } else if (email.includes('admin') || email.includes('owner') || email.includes('manager') || user?.role === 'SHOP_OWNER' || user?.role === 'MANAGER' || user?.role === 'ADMIN') {
         navigate('/admin/dashboard', { replace: true });
-      } else if (email.includes('barber')) {
+      } else if (email.includes('barber') || user?.role === 'BARBER') {
         navigate('/barber/dashboard', { replace: true });
       } else {
         navigate('/customer/dashboard', { replace: true });
@@ -51,11 +55,13 @@ export const LoginPage: React.FC = () => {
     }
   };
 
-  // Helper for quick testing during development
+  // Helper for quick testing during development & demo reviews
   const handleQuickLogin = (testEmail: string, testPass: string) => {
     setEmail(testEmail);
     setPassword(testPass);
   };
+
+  const brandName = tenant?.name || 'Crown & Blade';
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-neutral-950">
@@ -63,10 +69,14 @@ export const LoginPage: React.FC = () => {
         {/* Brand Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-amber-600/10 text-amber-500 mb-3 border border-amber-600/20">
-            <Scissors className="w-6 h-6" />
+            {tenant?.logo ? (
+              <img src={tenant.logo} alt={brandName} className="w-8 h-8 rounded-lg object-contain" />
+            ) : (
+              <Scissors className="w-6 h-6" />
+            )}
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-neutral-100">Welcome Back</h1>
-          <p className="text-sm text-neutral-400 mt-1">Sign in to manage appointments & schedule</p>
+          <h1 className="text-2xl font-bold tracking-tight text-neutral-100">{brandName}</h1>
+          <p className="text-sm text-neutral-400 mt-1">Multi-Tenant SaaS Portal Authentication</p>
         </div>
 
         <Card className="border-neutral-800 shadow-xl">
@@ -124,32 +134,40 @@ export const LoginPage: React.FC = () => {
             </Button>
           </form>
 
-          {/* Quick Login Helper for Development */}
+          {/* Quick Login Helper for Development & SaaS Platform Demonstration */}
           <div className="mt-6 pt-5 border-t border-neutral-800/80">
-            <p className="text-xs text-neutral-400 font-medium mb-2.5 text-center">
-              Quick Fill Demo Accounts:
+            <p className="text-xs text-neutral-400 font-medium mb-2.5 text-center flex items-center justify-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 text-amber-500" />
+              Demo Roles Quick Sign-In:
             </p>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => handleQuickLogin('admin@barbershop.com', 'Admin123!')}
-                className="text-xs py-1.5 px-2 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-mono transition-colors"
+                onClick={() => handleQuickLogin('superadmin@bsms.com', 'SuperAdmin123!')}
+                className="text-xs py-1.5 px-2 rounded bg-amber-950/40 hover:bg-amber-900/60 border border-amber-800/40 text-amber-300 font-mono transition-colors text-left"
               >
-                Admin
+                👑 Super Admin
+              </button>
+              <button
+                type="button"
+                onClick={() => handleQuickLogin('owner@crownandblade.com', 'Owner123!')}
+                className="text-xs py-1.5 px-2 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-mono transition-colors text-left"
+              >
+                🏬 Shop Owner
               </button>
               <button
                 type="button"
                 onClick={() => handleQuickLogin('barber@barbershop.com', 'Barber123!')}
-                className="text-xs py-1.5 px-2 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-mono transition-colors"
+                className="text-xs py-1.5 px-2 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-mono transition-colors text-left"
               >
-                Barber
+                ✂️ Barber
               </button>
               <button
                 type="button"
                 onClick={() => handleQuickLogin('customer@barbershop.com', 'Customer123!')}
-                className="text-xs py-1.5 px-2 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-mono transition-colors"
+                className="text-xs py-1.5 px-2 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-mono transition-colors text-left"
               >
-                Customer
+                👤 Customer
               </button>
             </div>
           </div>

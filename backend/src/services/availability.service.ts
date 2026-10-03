@@ -34,20 +34,32 @@ export class AvailabilityService {
     serviceId: string,
     barberId: string,
     dateStr: string, // "YYYY-MM-DD"
-    excludeAppointmentId?: string
+    excludeAppointmentId?: string,
+    tenantId?: string,
+    db: any = prisma
   ): Promise<{ slots: string[]; metadata: { isOpen: boolean; durationMinutes: number } }> {
-    // 1. Validate service
-    const service = await prisma.service.findUnique({
-      where: { id: serviceId },
+    if (!tenantId) {
+      throw new AppError('Tenant context is required to calculate availability.', 400, 'TENANT_REQUIRED');
+    }
+
+    // 1. Validate service belongs to tenant and is active
+    const service = await db.service.findFirst({
+      where: {
+        id: serviceId,
+        tenantId,
+      },
     });
 
     if (!service || !service.isActive) {
       throw new AppError('Requested service is invalid or currently inactive.', 400, 'INVALID_SERVICE');
     }
 
-    // 2. Validate barber
-    const barber = await prisma.barber.findUnique({
-      where: { id: barberId },
+    // 2. Validate barber belongs to tenant and is active
+    const barber = await db.barber.findFirst({
+      where: {
+        id: barberId,
+        tenantId,
+      },
     });
 
     if (!barber || !barber.isActive) {
@@ -66,9 +78,12 @@ export class AvailabilityService {
     }
     const dayOfWeek = dateObj.getUTCDay();
 
-    // 4. Check business schedule
-    const businessSchedule = await prisma.businessSchedule.findUnique({
-      where: { dayOfWeek },
+    // 4. Check business schedule for tenant
+    const businessSchedule = await db.businessSchedule.findFirst({
+      where: {
+        dayOfWeek,
+        tenantId,
+      },
     });
 
     if (!businessSchedule || !businessSchedule.isOpen) {
@@ -76,7 +91,7 @@ export class AvailabilityService {
     }
 
     // 5. Check barber availability window
-    const barberWindow = await prisma.barberAvailability.findUnique({
+    const barberWindow = await db.barberAvailability.findUnique({
       where: {
         barberId_dayOfWeek: {
           barberId,
@@ -99,10 +114,11 @@ export class AvailabilityService {
     const windowEnd = Math.min(shopClose, barberEnd);
     const duration = service.durationMinutes;
 
-    // 7. Query existing blocking appointments
-    const blockingAppointments = await prisma.appointment.findMany({
+    // 7. Query existing blocking appointments for this barber in this tenant
+    const blockingAppointments = await db.appointment.findMany({
       where: {
         barberId,
+        tenantId,
         appointmentDate: dateStr,
         status: { in: this.getBlockingStatuses() },
         ...(excludeAppointmentId ? { id: { not: excludeAppointmentId } } : {}),
@@ -114,7 +130,7 @@ export class AvailabilityService {
       },
     });
 
-    const bookedIntervals = blockingAppointments.map((apt) => ({
+    const bookedIntervals = blockingAppointments.map((apt: any) => ({
       start: this.parseMinutes(apt.startTime),
       end: this.parseMinutes(apt.endTime),
     }));
@@ -128,7 +144,7 @@ export class AvailabilityService {
 
       // Overlap check: existing.start < requested.end && existing.end > requested.start
       const hasConflict = bookedIntervals.some(
-        (b) => Math.max(time, b.start) < Math.min(slotEnd, b.end)
+        (b: any) => Math.max(time, b.start) < Math.min(slotEnd, b.end)
       );
 
       if (!hasConflict) {

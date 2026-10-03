@@ -1,10 +1,10 @@
-
 import type { ApiResponse } from '../types';
 
 const BASE_URL =
   import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const STORAGE_KEY = 'bsms_auth_session';
+const TENANT_STORAGE_KEY = 'bsms_active_tenant_slug';
 
 export class ApiError extends Error {
   statusCode: number;
@@ -27,6 +27,39 @@ export class ApiError extends Error {
 
 interface RequestOptions extends RequestInit {
   params?: Record<string, string | number | boolean | undefined>;
+}
+
+export function getClientTenantSlug(): string | null {
+  // 1. Check window hostname for subdomain (e.g. "sirajbarbers.localhost" or "sirajbarbers.bsms.com")
+  if (typeof window !== 'undefined' && window.location) {
+    const host = window.location.hostname.toLowerCase();
+    const ignored = ['localhost', '127.0.0.1', 'bsms.com', 'www.bsms.com', 'admin.bsms.com', 'platform.bsms.com'];
+
+    if (!ignored.includes(host)) {
+      if (host.endsWith('.localhost')) {
+        const sub = host.replace('.localhost', '');
+        if (sub && !ignored.includes(sub)) return sub;
+      }
+      if (host.endsWith('.bsms.com')) {
+        const sub = host.replace('.bsms.com', '');
+        if (sub && !ignored.includes(sub)) return sub;
+      }
+      const parts = host.split('.');
+      if (parts.length > 2) {
+        return parts[0];
+      }
+    }
+  }
+
+  // 2. Check explicitly stored tenant slug
+  try {
+    const stored = localStorage.getItem(TENANT_STORAGE_KEY);
+    if (stored) return stored;
+  } catch {
+    // Ignore
+  }
+
+  return null;
 }
 
 export async function apiClient<T>(
@@ -86,6 +119,12 @@ export async function apiClient<T>(
     headers.set('Authorization', `Bearer ${token}`);
   }
 
+  // Automatically attach tenant slug header if resolved
+  const tenantSlug = getClientTenantSlug();
+  if (tenantSlug && !headers.has('x-tenant-slug')) {
+    headers.set('x-tenant-slug', tenantSlug);
+  }
+
   // Prevent browser/API caching from producing empty 304 responses.
   headers.set('Cache-Control', 'no-store');
 
@@ -101,9 +140,6 @@ export async function apiClient<T>(
       return undefined as T;
     }
 
-    // A 304 response has no response body.
-    // With cache: 'no-store' this should not normally happen,
-    // but handle it explicitly instead of trying response.json().
     if (response.status === 304) {
       throw new ApiError(
         'The server returned a cached response. Please try again.',
@@ -120,6 +156,15 @@ export async function apiClient<T>(
     }));
 
     if (!response.ok || !data.success) {
+      // Clear stale local token on 401 Unauthorized
+      if (response.status === 401) {
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+        } catch {
+          // ignore
+        }
+      }
+
       throw new ApiError(
         data.message ||
           'An error occurred during request.',

@@ -12,7 +12,7 @@ export class AuthController {
   static async register(req: Request, res: Response, next: NextFunction) {
     try {
       const validated = registerSchema.parse(req.body);
-      const result = await AuthService.register(validated);
+      const result = await AuthService.register(validated, req.tenantId);
       return sendSuccess(res, 'Account registered successfully.', result, 201);
     } catch (err) {
       next(err);
@@ -22,7 +22,7 @@ export class AuthController {
   static async login(req: Request, res: Response, next: NextFunction) {
     try {
       const validated = loginSchema.parse(req.body);
-      const result = await AuthService.login(validated);
+      const result = await AuthService.login(validated, req.tenantId);
       return sendSuccess(res, 'Logged in successfully.', result, 200);
     } catch (err) {
       next(err);
@@ -40,7 +40,7 @@ export class AuthController {
   static async getMe(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.id;
-      const result = await AuthService.getMe(userId);
+      const result = await AuthService.getMe(userId, req.tenantId);
       return sendSuccess(res, 'User profile fetched successfully.', result, 200);
     } catch (err) {
       next(err);

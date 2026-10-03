@@ -4,6 +4,7 @@ import { Role } from '@prisma/client';
 import prisma from '../config/prisma.js';
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { AuditService } from './audit.service.js';
 import type {
   RegisterInput,
   LoginInput,
@@ -12,12 +13,13 @@ import type {
 } from '../validators/auth.validator.js';
 
 export class AuthService {
-  static generateToken(user: { id: string; email: string; role: Role }) {
+  static generateToken(user: { id: string; email: string; role: Role; tenantId?: string }) {
     return jwt.sign(
       {
         id: user.id,
         email: user.email,
         role: user.role,
+        tenantId: user.tenantId,
       },
       env.JWT_SECRET,
       { expiresIn: '7d' }
@@ -29,7 +31,7 @@ export class AuthService {
     return sanitized;
   }
 
-  static async register(input: RegisterInput) {
+  static async register(input: RegisterInput, tenantId?: string) {
     const existing = await prisma.user.findUnique({
       where: { email: input.email.toLowerCase() },
     });
@@ -52,6 +54,7 @@ export class AuthService {
               fullName: input.fullName,
               phone: input.phone,
               profileImage: input.profileImage || null,
+              tenantId: tenantId || null,
             },
           },
         },
@@ -60,11 +63,24 @@ export class AuthService {
         },
       });
 
+      // If registered under a specific tenant, create Membership record
+      if (tenantId) {
+        await tx.membership.create({
+          data: {
+            userId: user.id,
+            tenantId,
+            role: Role.CUSTOMER,
+            isActive: true,
+          },
+        });
+      }
+
       // Welcome notification
       await tx.notification.create({
         data: {
           userId: user.id,
-          title: 'Welcome to Crown & Blade',
+          tenantId: tenantId || null,
+          title: 'Welcome to the Platform',
           message: 'Your account has been registered successfully. Explore services and book your first cut!',
           type: 'BOOKING_CONFIRMED',
           isRead: false,
@@ -74,7 +90,16 @@ export class AuthService {
       return user;
     });
 
-    const token = this.generateToken(result);
+    await AuditService.log({
+      tenantId,
+      actorUserId: result.id,
+      action: 'USER_REGISTERED',
+      entity: 'User',
+      entityId: result.id,
+      metadata: { email: result.email, role: 'CUSTOMER' },
+    });
+
+    const token = this.generateToken({ ...result, tenantId });
 
     return {
       user: {
@@ -85,25 +110,41 @@ export class AuthService {
         createdAt: result.createdAt.toISOString(),
         updatedAt: result.updatedAt.toISOString(),
       },
-      profile: result.customerProfile ? {
-        id: result.customerProfile.id,
-        userId: result.customerProfile.userId,
-        fullName: result.customerProfile.fullName,
-        phone: result.customerProfile.phone,
-        profileImage: result.customerProfile.profileImage || undefined,
-        createdAt: result.customerProfile.createdAt.toISOString(),
-        updatedAt: result.customerProfile.updatedAt.toISOString(),
-      } : null,
+      profile: result.customerProfile
+        ? {
+            id: result.customerProfile.id,
+            userId: result.customerProfile.userId,
+            fullName: result.customerProfile.fullName,
+            phone: result.customerProfile.phone,
+            profileImage: result.customerProfile.profileImage || undefined,
+            tenantId: result.customerProfile.tenantId || undefined,
+            createdAt: result.customerProfile.createdAt.toISOString(),
+            updatedAt: result.customerProfile.updatedAt.toISOString(),
+          }
+        : null,
       token,
     };
   }
 
-  static async login(input: LoginInput) {
+  static async login(input: LoginInput, activeTenantId?: string) {
     const user = await prisma.user.findUnique({
       where: { email: input.email.toLowerCase() },
       include: {
         customerProfile: true,
         barberProfile: true,
+        memberships: {
+          include: {
+            tenant: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                status: true,
+                logo: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -120,43 +161,107 @@ export class AuthService {
       throw new AppError('Your account has been deactivated. Please contact support.', 403, 'ACCOUNT_DEACTIVATED');
     }
 
-    const token = this.generateToken(user);
+    // Determine effective role & active tenant
+    let resolvedTenantId = activeTenantId;
+    let effectiveRole: Role = user.role;
+
+    if (user.role === Role.SUPER_ADMIN) {
+      effectiveRole = Role.SUPER_ADMIN;
+    } else if (activeTenantId) {
+      const activeMembership = user.memberships.find(
+        (m) => m.tenantId === activeTenantId && m.isActive
+      );
+      if (activeMembership) {
+        effectiveRole = activeMembership.role;
+      }
+    } else if (user.memberships.length > 0) {
+      const firstActive = user.memberships.find((m) => m.isActive) || user.memberships[0];
+      resolvedTenantId = firstActive.tenantId;
+      effectiveRole = firstActive.role;
+    }
+
+    const token = this.generateToken({
+      id: user.id,
+      email: user.email,
+      role: effectiveRole,
+      tenantId: resolvedTenantId,
+    });
+
     const profile = user.customerProfile || user.barberProfile;
 
     return {
       user: {
         id: user.id,
         email: user.email,
-        role: user.role,
+        role: effectiveRole,
+        platformRole: user.role,
         isActive: user.isActive,
+        activeTenantId: resolvedTenantId,
+        memberships: user.memberships.map((m) => ({
+          id: m.id,
+          tenantId: m.tenantId,
+          role: m.role,
+          isActive: m.isActive,
+          tenant: m.tenant,
+        })),
         createdAt: user.createdAt.toISOString(),
         updatedAt: user.updatedAt.toISOString(),
       },
-      profile: profile ? {
-        id: profile.id,
-        userId: profile.userId,
-        fullName: profile.fullName,
-        phone: profile.phone,
-        profileImage: profile.profileImage || undefined,
-        ...( 'isActive' in profile ? { isActive: profile.isActive } : {} ),
-        createdAt: profile.createdAt.toISOString(),
-        updatedAt: profile.updatedAt.toISOString(),
-      } : null,
+      profile: profile
+        ? {
+            id: profile.id,
+            userId: profile.userId,
+            fullName: profile.fullName,
+            phone: profile.phone,
+            profileImage: profile.profileImage || undefined,
+            ...('isActive' in profile ? { isActive: profile.isActive } : {}),
+            createdAt: profile.createdAt.toISOString(),
+            updatedAt: profile.updatedAt.toISOString(),
+          }
+        : null,
       token,
     };
   }
 
-  static async getMe(userId: string) {
+  static async getMe(userId: string, activeTenantId?: string) {
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {
         customerProfile: true,
         barberProfile: true,
+        memberships: {
+          include: {
+            tenant: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+                status: true,
+                logo: true,
+              },
+            },
+          },
+        },
       },
     });
 
     if (!user) {
       throw new AppError('User not found.', 404, 'USER_NOT_FOUND');
+    }
+
+    let effectiveRole: Role = user.role;
+    if (user.role === Role.SUPER_ADMIN) {
+      effectiveRole = Role.SUPER_ADMIN;
+    } else if (activeTenantId) {
+      const activeMembership = user.memberships.find(
+        (m) => m.tenantId === activeTenantId && m.isActive
+      );
+      if (activeMembership) {
+        effectiveRole = activeMembership.role;
+      }
+    } else if (user.memberships.length > 0) {
+      const firstActive = user.memberships.find((m) => m.isActive) || user.memberships[0];
+      effectiveRole = firstActive.role;
     }
 
     const profile = user.customerProfile || user.barberProfile;
@@ -165,21 +270,32 @@ export class AuthService {
       user: {
         id: user.id,
         email: user.email,
-        role: user.role,
+        role: effectiveRole,
+        platformRole: user.role,
         isActive: user.isActive,
+        activeTenantId: activeTenantId || user.memberships[0]?.tenantId,
+        memberships: user.memberships.map((m) => ({
+          id: m.id,
+          tenantId: m.tenantId,
+          role: m.role,
+          isActive: m.isActive,
+          tenant: m.tenant,
+        })),
         createdAt: user.createdAt.toISOString(),
         updatedAt: user.updatedAt.toISOString(),
       },
-      profile: profile ? {
-        id: profile.id,
-        userId: profile.userId,
-        fullName: profile.fullName,
-        phone: profile.phone,
-        profileImage: profile.profileImage || undefined,
-        ...( 'isActive' in profile ? { isActive: profile.isActive } : {} ),
-        createdAt: profile.createdAt.toISOString(),
-        updatedAt: profile.updatedAt.toISOString(),
-      } : null,
+      profile: profile
+        ? {
+            id: profile.id,
+            userId: profile.userId,
+            fullName: profile.fullName,
+            phone: profile.phone,
+            profileImage: profile.profileImage || undefined,
+            ...('isActive' in profile ? { isActive: profile.isActive } : {}),
+            createdAt: profile.createdAt.toISOString(),
+            updatedAt: profile.updatedAt.toISOString(),
+          }
+        : null,
     };
   }
 
@@ -196,7 +312,7 @@ export class AuthService {
       throw new AppError('User not found.', 404, 'USER_NOT_FOUND');
     }
 
-    if (user.role === Role.CUSTOMER && user.customerProfile) {
+    if (user.customerProfile) {
       const updated = await prisma.customerProfile.update({
         where: { id: user.customerProfile.id },
         data: {
@@ -208,7 +324,7 @@ export class AuthService {
       return updated;
     }
 
-    if (user.role === Role.BARBER && user.barberProfile) {
+    if (user.barberProfile) {
       const updated = await prisma.barber.update({
         where: { id: user.barberProfile.id },
         data: {
@@ -220,7 +336,7 @@ export class AuthService {
       return updated;
     }
 
-    throw new AppError('No profile associated with this user role.', 400, 'NO_PROFILE');
+    throw new AppError('No profile associated with this user account.', 400, 'NO_PROFILE');
   }
 
   static async changePassword(userId: string, input: ChangePasswordInput) {

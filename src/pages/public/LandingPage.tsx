@@ -1,9 +1,15 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Scissors, Calendar, Clock, ShieldCheck, ArrowRight, Star } from 'lucide-react';
+import { Scissors, Calendar, Clock, ShieldCheck, ArrowRight, Star, Building2 } from 'lucide-react';
 import { Button } from '../../components/common/Button';
+import { useTenant } from '../../contexts/TenantContext';
 
 export const LandingPage: React.FC = () => {
+  const { tenant } = useTenant();
+
+  const brandName = tenant?.name || 'Crown & Blade';
+  const currency = tenant?.currency || 'ETB';
+
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col">
       {/* Top Navigation Bar */}
@@ -11,9 +17,16 @@ export const LandingPage: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center">
-              <Scissors className="w-5 h-5" />
+              {tenant?.logo ? (
+                <img src={tenant.logo} alt={brandName} className="w-6 h-6 rounded object-contain" />
+              ) : (
+                <Scissors className="w-5 h-5" />
+              )}
             </div>
-            <span className="font-bold text-lg tracking-tight">Crown & Blade</span>
+            <div className="flex flex-col">
+              <span className="font-bold text-lg tracking-tight leading-tight">{brandName}</span>
+              {tenant && <span className="text-[10px] text-amber-500 font-mono">@{tenant.slug}</span>}
+            </div>
           </div>
 
           <nav className="flex items-center gap-3">
@@ -45,7 +58,7 @@ export const LandingPage: React.FC = () => {
           </h1>
 
           <p className="text-base sm:text-lg text-neutral-400 max-w-2xl mx-auto mb-10 leading-relaxed">
-            Reserve your seat with professional master barbers, pick your exact time window, and enjoy seamless grooming without crowded shop lines.
+            Reserve your seat at <strong className="text-neutral-200">{brandName}</strong> with professional master barbers, pick your exact time window, and enjoy seamless grooming without crowded shop lines.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -91,7 +104,7 @@ export const LandingPage: React.FC = () => {
               </div>
               <h2 className="text-lg font-semibold text-neutral-100 mb-2">Transparent Pricing</h2>
               <p className="text-sm text-neutral-400 leading-relaxed">
-                All services are clearly priced in ETB with options to pay online or directly at the shop counter.
+                All services are clearly priced in {currency} with options to pay online or directly at the shop counter.
               </p>
             </div>
           </div>
@@ -99,8 +112,12 @@ export const LandingPage: React.FC = () => {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-neutral-800 py-6 text-center text-xs text-neutral-500">
-        <p>&copy; 2026 Crown & Blade Barber Shop. All rights reserved.</p>
+      <footer className="border-t border-neutral-800 py-6 text-center text-xs text-neutral-500 flex flex-col sm:flex-row items-center justify-between max-w-7xl mx-auto px-4 w-full gap-2">
+        <p>&copy; 2026 {brandName}. All rights reserved.</p>
+        <div className="flex items-center gap-2 text-neutral-600">
+          <Building2 className="w-3.5 h-3.5" />
+          <span>Powered by BSMS Multi-Tenant SaaS Platform</span>
+        </div>
       </footer>
     </div>
   );

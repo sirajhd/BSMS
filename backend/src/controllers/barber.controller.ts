@@ -1,4 +1,3 @@
-
 import type { Request, Response, NextFunction } from 'express';
 import { BarberService } from '../services/barber.service.js';
 import { sendSuccess } from '../utils/response.js';
@@ -10,81 +9,53 @@ import {
 import { updateBarberAvailabilitySchema } from '../validators/schedule.validator.js';
 
 export class BarberController {
-  // Public: return only active barbers
-  static async getAll(
-    _req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  // Public: return only active barbers in current tenant
+  static async getAll(req: Request, res: Response, next: NextFunction) {
     try {
-      const barbers = await BarberService.getAllBarbers(false);
+      if (!req.tenantId) {
+        throw new AppError('Tenant context is required to list shop barbers.', 400, 'TENANT_REQUIRED');
+      }
+      const includeInactive = req.query.includeInactive === 'true';
+      const barbers = await BarberService.getAllBarbers(req.tenantId, includeInactive);
 
-      return sendSuccess(
-        res,
-        'Barbers fetched successfully.',
-        barbers
-      );
+      return sendSuccess(res, 'Barbers fetched successfully.', barbers);
     } catch (err) {
       next(err);
     }
   }
 
-  // Public: return only an active barber
-  static async getById(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  // Public: return only an active barber in current tenant
+  static async getById(req: Request, res: Response, next: NextFunction) {
     try {
-      const barber = await BarberService.getPublicBarberById(
-        req.params.id
-      );
+      if (!req.tenantId) {
+        throw new AppError('Tenant context is required to view barber details.', 400, 'TENANT_REQUIRED');
+      }
+      const barber = await BarberService.getPublicBarberById(req.params.id, req.tenantId);
 
-      return sendSuccess(
-        res,
-        'Barber fetched successfully.',
-        barber
-      );
+      return sendSuccess(res, 'Barber fetched successfully.', barber);
     } catch (err) {
       next(err);
     }
   }
 
-  // Admin only
-  static async create(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  // Admin/Shop Owner/Manager
+  static async create(req: Request, res: Response, next: NextFunction) {
     try {
       const validated = createBarberSchema.parse(req.body);
-      const created = await BarberService.createBarber(validated);
+      const created = await BarberService.createBarber(validated, req.tenantId, req.user?.id);
 
-      return sendSuccess(
-        res,
-        'Barber created successfully.',
-        created,
-        201
-      );
+      return sendSuccess(res, 'Barber created successfully.', created, 201);
     } catch (err) {
       next(err);
     }
   }
 
-  // Admin can update any barber.
-  // Barber can update only their own profile.
-  static async update(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  // Admin can update any barber in shop. Barber can update only their own profile.
+  static async update(req: Request, res: Response, next: NextFunction) {
     try {
       const user = req.user!;
 
-      if (
-        user.role === 'BARBER' &&
-        user.barberId !== req.params.id
-      ) {
+      if (user.role === 'BARBER' && user.barberId !== req.params.id) {
         throw new AppError(
           'Forbidden. You can only update your own barber profile.',
           403,
@@ -101,83 +72,67 @@ export class BarberController {
 
       const updated = await BarberService.updateBarber(
         req.params.id,
-        validated
+        validated,
+        req.tenantId,
+        user.id
       );
 
-      return sendSuccess(
-        res,
-        'Barber updated successfully.',
-        updated
-      );
+      return sendSuccess(res, 'Barber updated successfully.', updated);
     } catch (err) {
       next(err);
     }
   }
 
-  // Admin only
-  static async toggleStatus(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  // Admin / Shop Owner only
+  static async toggleStatus(req: Request, res: Response, next: NextFunction) {
     try {
       const updated = await BarberService.toggleBarberStatus(
-        req.params.id
+        req.params.id,
+        req.tenantId,
+        req.user?.id
       );
 
-      return sendSuccess(
-        res,
-        'Barber status toggled successfully.',
-        updated
-      );
+      return sendSuccess(res, 'Barber status toggled successfully.', updated);
     } catch (err) {
       next(err);
     }
   }
 
   // Public: only active barber availability
-  static async getAvailability(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  static async getAvailability(req: Request, res: Response, next: NextFunction) {
     try {
-      const windows =
-        await BarberService.getPublicBarberAvailability(
-          req.params.id
-        );
-
-      return sendSuccess(
-        res,
-        'Barber availability fetched successfully.',
-        windows
+      if (!req.tenantId) {
+        throw new AppError('Tenant context is required to view barber availability.', 400, 'TENANT_REQUIRED');
+      }
+      const windows = await BarberService.getPublicBarberAvailability(
+        req.params.id,
+        req.tenantId
       );
+
+      return sendSuccess(res, 'Barber availability fetched successfully.', windows);
     } catch (err) {
       next(err);
     }
   }
 
-  // Admin only
-  static async updateAvailability(
-    req: Request,
-    res: Response,
-    next: NextFunction
-  ) {
+  // Admin / Shop Owner / Manager / Barber own
+  static async updateAvailability(req: Request, res: Response, next: NextFunction) {
     try {
-      const validated =
-        updateBarberAvailabilitySchema.parse(req.body);
+      const user = req.user!;
+      if (user.role === 'BARBER' && user.barberId !== req.params.id) {
+        throw new AppError('Forbidden. You can only update your own availability.', 403, 'FORBIDDEN');
+      }
 
-      const updated =
-        await BarberService.updateBarberAvailability(
-          req.params.id,
-          validated
-        );
+      const validated = updateBarberAvailabilitySchema.parse(req.body);
 
-      return sendSuccess(
-        res,
-        'Barber availability updated successfully.',
-        updated
+      const updated = await BarberService.updateBarberAvailability(
+        req.params.id,
+        validated,
+        req.tenantId,
+        user.id
       );
+
+      return sendSuccess(res, 'Barber availability updated successfully.', updated);
     } catch (err) {
       next(err);
     }

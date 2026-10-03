@@ -1,18 +1,19 @@
-# Production Deployment Guide: Contabo VPS & Namecheap
+# Production Deployment Guide: Multi-Tenant SaaS Platform
 
-This step-by-step guide walks you through deploying the **Barber Shop Appointment Management System** to a Contabo VPS with a custom domain managed by Namecheap.
+This step-by-step guide walks you through deploying the **BSMS Multi-Tenant SaaS Platform** to a Contabo VPS with custom domain management and wildcard subdomain routing via Namecheap.
 
 ---
 
-## 1. Namecheap DNS Configuration
+## 1. Namecheap Wildcard DNS Configuration
 
 In your **Namecheap Dashboard** $\rightarrow$ **Domain List** $\rightarrow$ **Advanced DNS**, add the following **A Records** pointing to your Contabo VPS Public IP Address (e.g. `198.51.100.25`):
 
-| Type | Host | Value | TTL |
-|---|---|---|---|
-| **A Record** | `@` | `<YOUR_CONTABO_VPS_IP>` | Automatic (or 5 min) |
-| **A Record** | `www` | `<YOUR_CONTABO_VPS_IP>` | Automatic (or 5 min) |
-| **A Record** | `api` | `<YOUR_CONTABO_VPS_IP>` | Automatic (or 5 min) |
+| Type | Host | Value | TTL | Purpose |
+|---|---|---|---|---|
+| **A Record** | `@` | `<YOUR_CONTABO_VPS_IP>` | Automatic (or 5 min) | Root Landing & App Portal |
+| **A Record** | `www` | `<YOUR_CONTABO_VPS_IP>` | Automatic (or 5 min) | WWW Redirection |
+| **A Record** | `*` | `<YOUR_CONTABO_VPS_IP>` | Automatic (or 5 min) | **Wildcard Tenant Subdomains** (`*.yourdomain.com`) |
+| **A Record** | `api` | `<YOUR_CONTABO_VPS_IP>` | Automatic (or 5 min) | Backend API Root |
 
 *DNS propagation usually takes between 5 to 30 minutes.*
 
@@ -72,7 +73,7 @@ UPLOAD_DIR=uploads
 
 ---
 
-## 4. Run Application with Docker Compose
+## 4. Launch Multi-Tenant SaaS with Docker Compose
 
 ```bash
 # Launch containers in background
@@ -85,16 +86,23 @@ docker compose exec backend npm run prisma:seed
 
 ---
 
-## 5. Setup SSL / HTTPS with Let's Encrypt Certbot
+## 5. Wildcard SSL / HTTPS with Let's Encrypt Certbot & DNS-01
 
-You can configure Certbot on the host to manage automatic SSL renewals:
+To issue a valid SSL certificate for your root domain AND all tenant subdomains (`*.yourdomain.com`), use Certbot with DNS validation:
 
 ```bash
-sudo apt install -y certbot python3-certbot-nginx
+sudo apt install -y certbot python3-certbot-dns-namecheap
 
-# Obtain SSL Certificate for your domains
-sudo certbot certonly --standalone -d yourdomain.com -d www.yourdomain.com -d api.yourdomain.com
+# Obtain Wildcard SSL Certificate
+sudo certbot certonly \
+  --manual \
+  --preferred-challenges dns \
+  --server https://acme-v02.api.letsencrypt.org/directory \
+  -d yourdomain.com \
+  -d "*.yourdomain.com"
 ```
+
+Add the generated TXT records into your Namecheap DNS records to complete validation.
 
 ---
 
@@ -113,8 +121,8 @@ Add the backup script:
 #!/bin/bash
 BACKUP_DIR="/var/backups/bsms"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-docker exec -t bsms_postgres pg_dumpall -c -U postgres > "$BACKUP_DIR/db_backup_$TIMESTAMP.sql"
-find "$BACKUP_DIR" -type f -name "*.sql" -mtime +14 -delete
+docker exec -t bsms_postgres pg_dumpall -c -U postgres > "$BACKUP_DIR/saas_db_backup_$TIMESTAMP.sql"
+find "$BACKUP_DIR" -type f -name "*.sql" -mtime +30 -delete
 ```
 
 Make executable and add to crontab:
@@ -125,9 +133,9 @@ chmod +x /var/backups/bsms/backup.sh
 
 ---
 
-## 7. Zero-Downtime Updates
+## 7. Zero-Downtime Updates & Migrations
 
-When pushing updates to GitHub:
+When releasing new features or tenant platform updates:
 
 ```bash
 cd /var/www/bsms

@@ -14,12 +14,13 @@ export class AppointmentController {
   static async getAppointments(req: Request, res: Response, next: NextFunction) {
     try {
       const user = req.user!;
+      const tenantId = req.tenantId;
 
       if (user.role === Role.CUSTOMER) {
         if (!user.customerId) {
           throw new AppError('Customer profile not found.', 404, 'NO_PROFILE');
         }
-        const appointments = await AppointmentService.getCustomerAppointments(user.customerId);
+        const appointments = await AppointmentService.getCustomerAppointments(user.customerId, tenantId);
         return sendSuccess(res, 'Appointments fetched successfully.', appointments);
       }
 
@@ -29,12 +30,13 @@ export class AppointmentController {
         }
         const dateStr = req.query.date as string | undefined;
         const status = req.query.status as any | undefined;
-        const appointments = await AppointmentService.getBarberAppointments(user.barberId, dateStr, status);
+        const appointments = await AppointmentService.getBarberAppointments(user.barberId, dateStr, status, tenantId);
         return sendSuccess(res, 'Appointments fetched successfully.', appointments);
       }
 
-      // ADMIN
+      // SHOP_OWNER, MANAGER, SUPER_ADMIN, ADMIN
       const appointments = await AppointmentService.getAllAppointments({
+        tenantId,
         searchQuery: req.query.search as string | undefined,
         dateStr: req.query.date as string | undefined,
         barberId: req.query.barberId as string | undefined,
@@ -50,7 +52,7 @@ export class AppointmentController {
   static async getById(req: Request, res: Response, next: NextFunction) {
     try {
       const user = req.user!;
-      const apt = await AppointmentService.getAppointmentById(req.params.id);
+      const apt = await AppointmentService.getAppointmentById(req.params.id, req.tenantId);
 
       if (user.role === Role.CUSTOMER && apt.customerId !== user.customerId) {
         throw new AppError('Forbidden. You do not have permission to view this appointment.', 403, 'FORBIDDEN');
@@ -74,7 +76,7 @@ export class AppointmentController {
       }
 
       const validated = createAppointmentSchema.parse(req.body);
-      const created = await AppointmentService.bookAppointment(user.customerId, validated);
+      const created = await AppointmentService.bookAppointment(user.customerId, validated, req.tenantId, user.id);
       return sendSuccess(res, 'Appointment booked successfully.', created, 201);
     } catch (err) {
       next(err);
@@ -84,10 +86,14 @@ export class AppointmentController {
   static async cancel(req: Request, res: Response, next: NextFunction) {
     try {
       const user = req.user!;
+      if (!user.role) {
+        throw new AppError('Forbidden. Active tenant role required.', 403, 'FORBIDDEN');
+      }
       const cancelled = await AppointmentService.cancelAppointment(
         req.params.id,
         user.id,
-        user.role
+        user.role,
+        req.tenantId
       );
       return sendSuccess(res, 'Appointment cancelled successfully.', cancelled);
     } catch (err) {
@@ -98,12 +104,16 @@ export class AppointmentController {
   static async reschedule(req: Request, res: Response, next: NextFunction) {
     try {
       const user = req.user!;
+      if (!user.role) {
+        throw new AppError('Forbidden. Active tenant role required.', 403, 'FORBIDDEN');
+      }
       const validated = rescheduleAppointmentSchema.parse(req.body);
       const rescheduled = await AppointmentService.rescheduleAppointment(
         req.params.id,
         validated,
         user.id,
-        user.role
+        user.role,
+        req.tenantId
       );
       return sendSuccess(res, 'Appointment rescheduled successfully.', rescheduled);
     } catch (err) {
@@ -114,12 +124,16 @@ export class AppointmentController {
   static async updateStatus(req: Request, res: Response, next: NextFunction) {
     try {
       const user = req.user!;
+      if (!user.role) {
+        throw new AppError('Forbidden. Active tenant role required.', 403, 'FORBIDDEN');
+      }
       const validated = updateAppointmentStatusSchema.parse(req.body);
       const updated = await AppointmentService.updateStatus(
         req.params.id,
         validated,
         user.id,
-        user.role
+        user.role,
+        req.tenantId
       );
       return sendSuccess(res, 'Appointment status updated successfully.', updated);
     } catch (err) {
@@ -130,14 +144,19 @@ export class AppointmentController {
   static async createWalkIn(req: Request, res: Response, next: NextFunction) {
     try {
       const user = req.user!;
-      if (user.role !== Role.BARBER && user.role !== Role.ADMIN) {
-        throw new AppError('Forbidden. Only barbers and admins can create walk-ins.', 403, 'FORBIDDEN');
+      if (!user.role) {
+        throw new AppError('Forbidden. Active tenant role required.', 403, 'FORBIDDEN');
+      }
+      const allowedStaffRoles: Role[] = [Role.BARBER, Role.SHOP_OWNER, Role.MANAGER, Role.ADMIN, Role.SUPER_ADMIN];
+      const isAuthorized = allowedStaffRoles.includes(user.role);
+      if (!isAuthorized) {
+        throw new AppError('Forbidden. Only staff can record walk-ins.', 403, 'FORBIDDEN');
       }
 
       const validated = createWalkInSchema.parse(req.body);
       const barberProfileId = user.role === Role.BARBER ? user.barberId! : validated.barberId;
 
-      const created = await AppointmentService.createWalkIn(validated, barberProfileId);
+      const created = await AppointmentService.createWalkIn(validated, barberProfileId, req.tenantId);
       return sendSuccess(res, 'Walk-in appointment recorded successfully.', created, 201);
     } catch (err) {
       next(err);

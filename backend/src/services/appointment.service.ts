@@ -8,6 +8,7 @@ import {
 import prisma from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AvailabilityService } from './availability.service.js';
+import { AuditService } from './audit.service.js';
 import type {
   CreateAppointmentInput,
   RescheduleAppointmentInput,
@@ -47,6 +48,7 @@ export class AppointmentService {
   static formatAppointment(apt: any) {
     return {
       id: apt.id,
+      tenantId: apt.tenantId,
       customerId: apt.customerId,
       barberId: apt.barberId,
       serviceId: apt.serviceId,
@@ -101,9 +103,16 @@ export class AppointmentService {
     };
   }
 
-  static async getCustomerAppointments(customerId: string) {
+  static async getCustomerAppointments(customerId: string, tenantId?: string) {
+    if (!tenantId) {
+      throw new AppError('Tenant context is required to fetch appointments.', 400, 'TENANT_REQUIRED');
+    }
+
     const appointments = await prisma.appointment.findMany({
-      where: { customerId },
+      where: {
+        customerId,
+        tenantId,
+      },
       include: {
         customer: true,
         barber: true,
@@ -118,11 +127,17 @@ export class AppointmentService {
   static async getBarberAppointments(
     barberId: string,
     dateStr?: string,
-    status?: AppointmentStatus
+    status?: AppointmentStatus,
+    tenantId?: string
   ) {
+    if (!tenantId) {
+      throw new AppError('Tenant context is required to fetch appointments.', 400, 'TENANT_REQUIRED');
+    }
+
     const appointments = await prisma.appointment.findMany({
       where: {
         barberId,
+        tenantId,
         ...(dateStr ? { appointmentDate: dateStr } : {}),
         ...(status ? { status } : {}),
       },
@@ -138,13 +153,19 @@ export class AppointmentService {
   }
 
   static async getAllAppointments(filters: {
+    tenantId?: string;
     searchQuery?: string;
     dateStr?: string;
     barberId?: string;
     status?: AppointmentStatus;
   }) {
+    if (!filters.tenantId) {
+      throw new AppError('Tenant context is required to fetch appointments.', 400, 'TENANT_REQUIRED');
+    }
+
     const appointments = await prisma.appointment.findMany({
       where: {
+        tenantId: filters.tenantId,
         ...(filters.dateStr ? { appointmentDate: filters.dateStr } : {}),
         ...(filters.barberId && filters.barberId !== 'ALL'
           ? { barberId: filters.barberId }
@@ -178,9 +199,16 @@ export class AppointmentService {
     return formatted;
   }
 
-  static async getAppointmentById(id: string) {
-    const apt = await prisma.appointment.findUnique({
-      where: { id },
+  static async getAppointmentById(id: string, tenantId?: string) {
+    if (!tenantId) {
+      throw new AppError('Tenant context is required.', 400, 'TENANT_REQUIRED');
+    }
+
+    const apt = await prisma.appointment.findFirst({
+      where: {
+        id,
+        tenantId,
+      },
       include: {
         customer: { include: { user: true } },
         barber: { include: { user: true } },
@@ -199,15 +227,44 @@ export class AppointmentService {
     return apt;
   }
 
-  // Transactional creation with concurrency & conflict protection
+  // Transactional creation with concurrency & conflict protection + strict tenant scoping
   static async bookAppointment(
     customerId: string,
-    input: CreateAppointmentInput
+    input: CreateAppointmentInput,
+    tenantId?: string,
+    requestingUserId?: string
   ) {
-    // 1. Verify customer does not already have an active/upcoming appointment
+    if (!tenantId) {
+      throw new AppError('Tenant context is required to book an appointment.', 400, 'TENANT_REQUIRED');
+    }
+
+    // 1. Authoritative Customer Verification: customer profile must exist and belong to / be active in tenant
+    const customerProfile = await prisma.customerProfile.findUnique({
+      where: { id: customerId },
+      include: { user: { include: { memberships: true } } },
+    });
+
+    if (!customerProfile) {
+      throw new AppError('Customer profile not found.', 404, 'NO_PROFILE');
+    }
+
+    if (requestingUserId && customerProfile.userId !== requestingUserId) {
+      throw new AppError('Forbidden. Cannot book appointments on behalf of another account.', 403, 'FORBIDDEN');
+    }
+
+    const isAuthorizedInTenant =
+      customerProfile.tenantId === tenantId ||
+      customerProfile.user.memberships.some((m) => m.tenantId === tenantId && m.isActive);
+
+    if (!isAuthorizedInTenant) {
+      throw new AppError('Customer is not associated with this business.', 403, 'TENANT_MISMATCH');
+    }
+
+    // 2. Verify customer does not already have an active/upcoming appointment in this tenant
     const existingActive = await prisma.appointment.findFirst({
       where: {
         customerId,
+        tenantId,
         status: { in: this.getActiveStatuses() },
       },
     });
@@ -220,26 +277,32 @@ export class AppointmentService {
       );
     }
 
-    // 2. Fetch authoritative service and barber
-    const service = await prisma.service.findUnique({
-      where: { id: input.serviceId },
+    // 3. Fetch authoritative service and barber within tenant
+    const service = await prisma.service.findFirst({
+      where: {
+        id: input.serviceId,
+        tenantId,
+      },
     });
 
     if (!service || !service.isActive) {
       throw new AppError(
-        'The requested service is inactive or not found.',
+        'The requested service is inactive or not found in this shop.',
         400,
         'INVALID_SERVICE'
       );
     }
 
-    const barber = await prisma.barber.findUnique({
-      where: { id: input.barberId },
+    const barber = await prisma.barber.findFirst({
+      where: {
+        id: input.barberId,
+        tenantId,
+      },
     });
 
     if (!barber || !barber.isActive) {
       throw new AppError(
-        'The selected barber is currently unavailable.',
+        'The selected barber is currently unavailable in this shop.',
         400,
         'INACTIVE_BARBER'
       );
@@ -256,13 +319,28 @@ export class AppointmentService {
       endTime
     );
 
-    // 3. Atomically check availability and insert appointment in transaction
+    // 4. Atomically check availability and insert appointment in transaction using transaction client
     const created = await prisma.$transaction(async (tx) => {
-      // Re-verify slot availability inside transaction
+      // Advisory transaction lock to serialize concurrent bookings for the specific barber and date (fail closed)
+      try {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + input.barberId + '_' + input.appointmentDate}))`;
+      } catch (lockError) {
+        console.error('Failed to acquire booking advisory transaction lock:', lockError);
+        throw new AppError(
+          'Unable to acquire scheduling lock for the requested time slot. Please retry.',
+          500,
+          'CONCURRENCY_LOCK_FAILED'
+        );
+      }
+
+      // Re-verify slot availability inside transaction using the transaction client
       const availability = await AvailabilityService.getAvailableSlots(
         input.serviceId,
         input.barberId,
-        input.appointmentDate
+        input.appointmentDate,
+        undefined,
+        tenantId,
+        tx
       );
 
       if (!availability.slots.includes(input.startTime)) {
@@ -273,8 +351,29 @@ export class AppointmentService {
         );
       }
 
+      // Exact interval conflict check inside transaction
+      const conflictingAppointment = await tx.appointment.findFirst({
+        where: {
+          barberId: input.barberId,
+          tenantId,
+          appointmentDate: input.appointmentDate,
+          status: { in: this.getActiveStatuses() },
+          startAt: { lt: endAt },
+          endAt: { gt: startAt },
+        },
+      });
+
+      if (conflictingAppointment) {
+        throw new AppError(
+          'This specific time slot is no longer available. Please choose an alternate time.',
+          409,
+          'APPOINTMENT_CONFLICT'
+        );
+      }
+
       const appointment = await tx.appointment.create({
         data: {
+          tenantId,
           customerId,
           barberId: input.barberId,
           serviceId: input.serviceId,
@@ -301,12 +400,12 @@ export class AppointmentService {
       // Create Payment Ledger entry
       await tx.payment.create({
         data: {
+          tenantId,
           appointmentId: appointment.id,
           amount: service.price,
           method: input.paymentMethod as PaymentMethod,
           status: PaymentStatus.PENDING,
-          provider:
-            input.paymentMethod === 'ONLINE' ? 'GREY' : 'MANUAL',
+          provider: input.paymentMethod === 'ONLINE' ? 'GREY' : 'MANUAL',
         },
       });
 
@@ -315,6 +414,7 @@ export class AppointmentService {
         await tx.notification.create({
           data: {
             userId: appointment.customer.userId,
+            tenantId,
             title: 'Booking Confirmed',
             message: `Your ${service.name} cut with ${barber.fullName} is scheduled for ${input.appointmentDate} at ${input.startTime}.`,
             type: NotificationType.BOOKING_CONFIRMED,
@@ -327,6 +427,7 @@ export class AppointmentService {
         await tx.notification.create({
           data: {
             userId: appointment.barber.userId,
+            tenantId,
             title: 'New Booking Assigned',
             message: `${appointment.customer?.fullName || 'Client'} reserved ${service.name} on ${input.appointmentDate} at ${input.startTime}.`,
             type: NotificationType.BOOKING_CONFIRMED,
@@ -337,15 +438,34 @@ export class AppointmentService {
       return appointment;
     });
 
+    await AuditService.log({
+      tenantId,
+      actorUserId: created.customer?.userId,
+      action: 'APPOINTMENT_BOOKED',
+      entity: 'Appointment',
+      entityId: created.id,
+      metadata: {
+        date: input.appointmentDate,
+        time: input.startTime,
+        service: service.name,
+        barber: barber.fullName,
+      },
+    });
+
     return this.formatAppointment(created);
   }
 
   static async cancelAppointment(
     appointmentId: string,
     requestingUserId: string,
-    requestingRole: Role
+    requestingRole: Role,
+    tenantId?: string
   ) {
-    const apt = await this.getAppointmentById(appointmentId);
+    if (!tenantId) {
+      throw new AppError('Tenant context is required.', 400, 'TENANT_REQUIRED');
+    }
+
+    const apt = await this.getAppointmentById(appointmentId, tenantId);
 
     // CUSTOMER can cancel only their own appointment
     if (
@@ -371,11 +491,7 @@ export class AppointmentService {
       );
     }
 
-    // ADMIN is unrestricted
-
-    if (
-      ['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(apt.status)
-    ) {
+    if (['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(apt.status)) {
       throw new AppError(
         `Cannot cancel an appointment with status ${apt.status}.`,
         400,
@@ -384,9 +500,21 @@ export class AppointmentService {
     }
 
     const updated = await prisma.$transaction(async (tx) => {
-      const cancelled = await tx.appointment.update({
-        where: { id: appointmentId },
+      const updateRes = await tx.appointment.updateMany({
+        where: {
+          id: appointmentId,
+          tenantId,
+          status: { notIn: [AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW] },
+        },
         data: { status: AppointmentStatus.CANCELLED },
+      });
+
+      if (updateRes.count === 0) {
+        throw new AppError('Appointment could not be cancelled or does not belong to this shop.', 400, 'CANCEL_FAILED');
+      }
+
+      const cancelled = await tx.appointment.findUnique({
+        where: { id: appointmentId },
         include: {
           customer: { include: { user: true } },
           barber: { include: { user: true } },
@@ -394,11 +522,16 @@ export class AppointmentService {
         },
       });
 
+      if (!cancelled) {
+        throw new AppError('Appointment not found.', 404, 'APPOINTMENT_NOT_FOUND');
+      }
+
       // Customer notification
       if (cancelled.customer) {
         await tx.notification.create({
           data: {
             userId: cancelled.customer.userId,
+            tenantId,
             title: 'Appointment Cancelled',
             message: `Your reservation for ${cancelled.appointmentDate} at ${cancelled.startTime} has been cancelled.`,
             type: NotificationType.APPOINTMENT_CANCELLED,
@@ -411,6 +544,7 @@ export class AppointmentService {
         await tx.notification.create({
           data: {
             userId: cancelled.barber.userId,
+            tenantId,
             title: 'Appointment Cancelled',
             message: `The booking on ${cancelled.appointmentDate} at ${cancelled.startTime} with ${cancelled.customer?.fullName || 'Client'} was cancelled.`,
             type: NotificationType.APPOINTMENT_CANCELLED,
@@ -421,6 +555,14 @@ export class AppointmentService {
       return cancelled;
     });
 
+    await AuditService.log({
+      tenantId,
+      actorUserId: requestingUserId,
+      action: 'APPOINTMENT_CANCELLED',
+      entity: 'Appointment',
+      entityId: appointmentId,
+    });
+
     return this.formatAppointment(updated);
   }
 
@@ -428,9 +570,14 @@ export class AppointmentService {
     appointmentId: string,
     input: RescheduleAppointmentInput,
     requestingUserId: string,
-    requestingRole: Role
+    requestingRole: Role,
+    tenantId?: string
   ) {
-    const apt = await this.getAppointmentById(appointmentId);
+    if (!tenantId) {
+      throw new AppError('Tenant context is required.', 400, 'TENANT_REQUIRED');
+    }
+
+    const apt = await this.getAppointmentById(appointmentId, tenantId);
 
     // CUSTOMER can reschedule only their own appointment
     if (
@@ -456,11 +603,7 @@ export class AppointmentService {
       );
     }
 
-    // ADMIN is unrestricted
-
-    if (
-      ['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(apt.status)
-    ) {
+    if (['COMPLETED', 'CANCELLED', 'NO_SHOW'].includes(apt.status)) {
       throw new AppError(
         `Cannot reschedule an appointment with status ${apt.status}.`,
         400,
@@ -468,7 +611,42 @@ export class AppointmentService {
       );
     }
 
-    const targetBarberId = input.barberId || apt.barberId;
+    // Authoritatively resolve and validate target barber within tenant
+    let targetBarberId = apt.barberId;
+    if (input.barberId) {
+      const targetBarber = await prisma.barber.findFirst({
+        where: {
+          id: input.barberId,
+          tenantId,
+          isActive: true,
+        },
+      });
+
+      if (!targetBarber) {
+        throw new AppError(
+          'The selected barber is invalid, inactive, or not found in this shop.',
+          400,
+          'INACTIVE_BARBER'
+        );
+      }
+      targetBarberId = targetBarber.id;
+    } else {
+      const currentBarber = await prisma.barber.findFirst({
+        where: {
+          id: targetBarberId,
+          tenantId,
+          isActive: true,
+        },
+      });
+
+      if (!currentBarber) {
+        throw new AppError(
+          'The assigned barber is inactive or no longer available in this shop.',
+          400,
+          'INACTIVE_BARBER'
+        );
+      }
+    }
 
     const duration =
       apt.serviceDurationSnapshot || apt.service.durationMinutes;
@@ -485,13 +663,27 @@ export class AppointmentService {
     );
 
     const updated = await prisma.$transaction(async (tx) => {
-      // Re-verify availability for the new slot
+      // Advisory transaction lock for target barber and date (fail closed)
+      try {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + targetBarberId + '_' + input.newDate}))`;
+      } catch (lockError) {
+        console.error('Failed to acquire reschedule advisory transaction lock:', lockError);
+        throw new AppError(
+          'Unable to acquire scheduling lock for the requested time slot. Please retry.',
+          500,
+          'CONCURRENCY_LOCK_FAILED'
+        );
+      }
+
+      // Re-verify availability for the new slot using the transaction client
       const availability =
         await AvailabilityService.getAvailableSlots(
           apt.serviceId,
           targetBarberId,
           input.newDate,
-          appointmentId
+          appointmentId,
+          tenantId,
+          tx
         );
 
       if (!availability.slots.includes(input.newTime)) {
@@ -502,8 +694,33 @@ export class AppointmentService {
         );
       }
 
-      const rescheduled = await tx.appointment.update({
-        where: { id: appointmentId },
+      // Overlap check inside transaction
+      const overlapping = await tx.appointment.findFirst({
+        where: {
+          barberId: targetBarberId,
+          tenantId,
+          appointmentDate: input.newDate,
+          status: { in: this.getActiveStatuses() },
+          id: { not: appointmentId },
+          startAt: { lt: endAt },
+          endAt: { gt: startAt },
+        },
+      });
+
+      if (overlapping) {
+        throw new AppError(
+          'The newly selected time slot is not available. Please choose an alternate slot.',
+          409,
+          'APPOINTMENT_CONFLICT'
+        );
+      }
+
+      const updateRes = await tx.appointment.updateMany({
+        where: {
+          id: appointmentId,
+          tenantId,
+          status: { in: this.getActiveStatuses() },
+        },
         data: {
           barberId: targetBarberId,
           appointmentDate: input.newDate,
@@ -513,6 +730,14 @@ export class AppointmentService {
           endAt,
           status: AppointmentStatus.RESCHEDULED,
         },
+      });
+
+      if (updateRes.count === 0) {
+        throw new AppError('Appointment could not be rescheduled or does not belong to this shop.', 400, 'UPDATE_FAILED');
+      }
+
+      const rescheduled = await tx.appointment.findUnique({
+        where: { id: appointmentId },
         include: {
           customer: { include: { user: true } },
           barber: { include: { user: true } },
@@ -520,11 +745,16 @@ export class AppointmentService {
         },
       });
 
+      if (!rescheduled) {
+        throw new AppError('Appointment not found.', 404, 'APPOINTMENT_NOT_FOUND');
+      }
+
       // Notification to customer
       if (rescheduled.customer) {
         await tx.notification.create({
           data: {
             userId: rescheduled.customer.userId,
+            tenantId,
             title: 'Appointment Rescheduled',
             message: `Your booking was rescheduled to ${input.newDate} at ${input.newTime}.`,
             type: NotificationType.APPOINTMENT_RESCHEDULED,
@@ -535,6 +765,15 @@ export class AppointmentService {
       return rescheduled;
     });
 
+    await AuditService.log({
+      tenantId,
+      actorUserId: requestingUserId,
+      action: 'APPOINTMENT_RESCHEDULED',
+      entity: 'Appointment',
+      entityId: appointmentId,
+      metadata: { newDate: input.newDate, newTime: input.newTime },
+    });
+
     return this.formatAppointment(updated);
   }
 
@@ -543,9 +782,14 @@ export class AppointmentService {
     appointmentId: string,
     input: UpdateAppointmentStatusInput,
     requestingUserId: string,
-    requestingRole: Role
+    requestingRole: Role,
+    tenantId?: string
   ) {
-    const apt = await this.getAppointmentById(appointmentId);
+    if (!tenantId) {
+      throw new AppError('Tenant context is required.', 400, 'TENANT_REQUIRED');
+    }
+
+    const apt = await this.getAppointmentById(appointmentId, tenantId);
 
     // CUSTOMER cannot change appointment status
     if (requestingRole === Role.CUSTOMER) {
@@ -567,8 +811,6 @@ export class AppointmentService {
         'FORBIDDEN'
       );
     }
-
-    // ADMIN is unrestricted
 
     const newStatus = input.status as AppointmentStatus;
 
@@ -629,14 +871,26 @@ export class AppointmentService {
       apt.paymentMethod === PaymentMethod.PAY_AT_SHOP;
 
     const updated = await prisma.$transaction(async (tx) => {
-      const result = await tx.appointment.update({
-        where: { id: appointmentId },
+      const updateRes = await tx.appointment.updateMany({
+        where: {
+          id: appointmentId,
+          tenantId,
+          status: apt.status,
+        },
         data: {
           status: newStatus,
           ...(shouldMarkPaid
             ? { paymentStatus: PaymentStatus.PAID }
             : {}),
         },
+      });
+
+      if (updateRes.count === 0) {
+        throw new AppError('Appointment status has been modified concurrently or does not match the expected state.', 409, 'STATUS_CONFLICT');
+      }
+
+      const result = await tx.appointment.findUnique({
+        where: { id: appointmentId },
         include: {
           customer: { include: { user: true } },
           barber: { include: { user: true } },
@@ -644,9 +898,13 @@ export class AppointmentService {
         },
       });
 
+      if (!result) {
+        throw new AppError('Appointment not found.', 404, 'APPOINTMENT_NOT_FOUND');
+      }
+
       if (shouldMarkPaid) {
         await tx.payment.updateMany({
-          where: { appointmentId },
+          where: { appointmentId, tenantId },
           data: { status: PaymentStatus.PAID },
         });
       }
@@ -660,10 +918,8 @@ export class AppointmentService {
 
         if (newStatus === AppointmentStatus.COMPLETED) {
           title = 'Service Completed';
-          message = `Thank you for visiting Crown & Blade! Your ${result.serviceNameSnapshot} session has finished.`;
-        } else if (
-          newStatus === AppointmentStatus.IN_PROGRESS
-        ) {
+          message = `Thank you for visiting! Your ${result.serviceNameSnapshot} session has finished.`;
+        } else if (newStatus === AppointmentStatus.IN_PROGRESS) {
           title = 'Haircut Started';
           message = `Your haircut session with ${result.barber.fullName} is now underway.`;
         } else if (newStatus === AppointmentStatus.LATE) {
@@ -679,6 +935,7 @@ export class AppointmentService {
         await tx.notification.create({
           data: {
             userId: result.customer.userId,
+            tenantId,
             title,
             message,
             type: notifType,
@@ -689,33 +946,53 @@ export class AppointmentService {
       return result;
     });
 
+    await AuditService.log({
+      tenantId,
+      actorUserId: requestingUserId,
+      action: 'APPOINTMENT_STATUS_UPDATED',
+      entity: 'Appointment',
+      entityId: appointmentId,
+      metadata: { previousStatus: apt.status, newStatus },
+    });
+
     return this.formatAppointment(updated);
   }
 
   // Walk-In creation
   static async createWalkIn(
     input: CreateWalkInInput,
-    barberProfileId: string
+    barberProfileId: string,
+    tenantId?: string
   ) {
-    const service = await prisma.service.findUnique({
-      where: { id: input.serviceId },
+    if (!tenantId) {
+      throw new AppError('Tenant context is required to record walk-in appointments.', 400, 'TENANT_REQUIRED');
+    }
+
+    const service = await prisma.service.findFirst({
+      where: {
+        id: input.serviceId,
+        tenantId,
+      },
     });
 
     if (!service || !service.isActive) {
       throw new AppError(
-        'Selected service is inactive or not found.',
+        'Selected service is inactive or not found in this shop.',
         400,
         'INVALID_SERVICE'
       );
     }
 
-    const barber = await prisma.barber.findUnique({
-      where: { id: barberProfileId },
+    const barber = await prisma.barber.findFirst({
+      where: {
+        id: barberProfileId,
+        tenantId,
+      },
     });
 
     if (!barber || !barber.isActive) {
       throw new AppError(
-        'Assigned barber is inactive.',
+        'Assigned barber is inactive in this shop.',
         400,
         'INACTIVE_BARBER'
       );
@@ -733,17 +1010,69 @@ export class AppointmentService {
     );
 
     const created = await prisma.$transaction(async (tx) => {
-      // Find or create customer profile for walk-in client
+      // 1. Advisory transaction lock to serialize concurrent walk-in bookings for the specific barber and date (fail closed)
+      try {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + barberProfileId + '_' + input.appointmentDate}))`;
+      } catch (lockError) {
+        console.error('Failed to acquire walk-in advisory transaction lock:', lockError);
+        throw new AppError(
+          'Unable to acquire scheduling lock for the requested time slot. Please retry.',
+          500,
+          'CONCURRENCY_LOCK_FAILED'
+        );
+      }
+
+      // 2. Authoritative availability check inside the transaction using transaction client
+      const availability = await AvailabilityService.getAvailableSlots(
+        input.serviceId,
+        barberProfileId,
+        input.appointmentDate,
+        undefined,
+        tenantId,
+        tx
+      );
+
+      if (!availability.slots.includes(input.startTime)) {
+        throw new AppError(
+          'The requested walk-in time slot is no longer available.',
+          409,
+          'APPOINTMENT_CONFLICT'
+        );
+      }
+
+      // 3. Exact interval overlap check inside transaction
+      const conflictingAppointment = await tx.appointment.findFirst({
+        where: {
+          barberId: barberProfileId,
+          tenantId,
+          appointmentDate: input.appointmentDate,
+          status: { in: this.getActiveStatuses() },
+          startAt: { lt: endAt },
+          endAt: { gt: startAt },
+        },
+      });
+
+      if (conflictingAppointment) {
+        throw new AppError(
+          'The requested walk-in time slot conflicts with an existing reservation.',
+          409,
+          'APPOINTMENT_CONFLICT'
+        );
+      }
+
+      // 4. Find or create customer profile for walk-in client in this tenant
       let customer = await tx.customerProfile.findFirst({
-        where: input.customerPhone
-          ? { phone: input.customerPhone }
-          : { fullName: input.customerName },
+        where: {
+          tenantId,
+          ...(input.customerPhone
+            ? { phone: input.customerPhone }
+            : { fullName: input.customerName }),
+        },
       });
 
       if (!customer) {
-        const tempEmail = `walkin_${Date.now()}@barbershop.local`;
+        const tempEmail = `walkin_${Date.now()}_${Math.random().toString(36).slice(2, 6)}@barbershop.local`;
         const tempPassword = `Walkin${Date.now()}!`;
-
         const passHash = await import('bcryptjs').then((b) =>
           b.hash(tempPassword, 10)
         );
@@ -758,10 +1087,20 @@ export class AppointmentService {
               create: {
                 fullName: input.customerName,
                 phone: input.customerPhone || 'Walk-in Client',
+                tenantId,
               },
             },
           },
           include: { customerProfile: true },
+        });
+
+        await tx.membership.create({
+          data: {
+            userId: user.id,
+            tenantId,
+            role: Role.CUSTOMER,
+            isActive: true,
+          },
         });
 
         customer = user.customerProfile!;
@@ -769,6 +1108,7 @@ export class AppointmentService {
 
       const appointment = await tx.appointment.create({
         data: {
+          tenantId,
           customerId: customer.id,
           barberId: barberProfileId,
           serviceId: input.serviceId,
@@ -794,6 +1134,7 @@ export class AppointmentService {
 
       await tx.payment.create({
         data: {
+          tenantId,
           appointmentId: appointment.id,
           amount: service.price,
           method: input.paymentMethod as PaymentMethod,
@@ -803,6 +1144,15 @@ export class AppointmentService {
       });
 
       return appointment;
+    });
+
+    await AuditService.log({
+      tenantId,
+      actorUserId: barber.userId,
+      action: 'WALK_IN_CREATED',
+      entity: 'Appointment',
+      entityId: created.id,
+      metadata: { client: input.customerName, service: service.name },
     });
 
     return this.formatAppointment(created);

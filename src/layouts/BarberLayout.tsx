@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import {
   Scissors,
   CalendarCheck,
@@ -15,6 +16,7 @@ import {
 
 export const BarberLayout: React.FC = () => {
   const { profile, logout } = useAuth();
+  const { tenant } = useTenant();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -28,6 +30,8 @@ export const BarberLayout: React.FC = () => {
       ? profile.fullName
       : 'Master Barber';
 
+  const shopName = tenant?.name || 'Crown & Blade';
+
   const navItems = [
     { label: "Today's Queue", path: '/barber/dashboard', icon: <CalendarCheck className="w-4 h-4" /> },
     { label: 'Walk-In Booking', path: '/barber/walk-in', icon: <UserPlus className="w-4 h-4" /> },
@@ -40,12 +44,12 @@ export const BarberLayout: React.FC = () => {
       <header className="sticky top-0 z-30 border-b border-neutral-800 bg-neutral-900/90 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           {/* Brand */}
-          <Link to="/barber/dashboard" className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center">
+          <Link to="/barber/dashboard" className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center shrink-0">
               <Scissors className="w-5 h-5" />
             </div>
-            <div>
-              <span className="font-bold text-base tracking-tight block">Crown & Blade</span>
+            <div className="min-w-0">
+              <span className="font-bold text-base tracking-tight block truncate">{shopName}</span>
               <span className="text-[10px] text-amber-500 font-semibold uppercase tracking-wider block -mt-1">
                 Barber Workstation
               </span>
@@ -164,7 +168,7 @@ export const BarberLayout: React.FC = () => {
       </main>
 
       <footer className="border-t border-neutral-800/80 py-4 text-center text-xs text-neutral-500">
-        <p>&copy; 2026 Crown & Blade Barber Shop — Station Interface</p>
+        <p>&copy; 2026 {shopName} — Station Interface</p>
       </footer>
     </div>
   );

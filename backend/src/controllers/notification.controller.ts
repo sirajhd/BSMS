@@ -6,7 +6,7 @@ export class NotificationController {
   static async getNotifications(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.id;
-      const notifications = await NotificationService.getUserNotifications(userId);
+      const notifications = await NotificationService.getUserNotifications(userId, req.tenantId);
       return sendSuccess(res, 'Notifications fetched successfully.', notifications);
     } catch (err) {
       next(err);
@@ -16,7 +16,7 @@ export class NotificationController {
   static async markAsRead(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.id;
-      const updated = await NotificationService.markAsRead(req.params.id, userId);
+      const updated = await NotificationService.markAsRead(req.params.id, userId, req.tenantId);
       return sendSuccess(res, 'Notification marked as read.', updated);
     } catch (err) {
       next(err);
@@ -26,7 +26,7 @@ export class NotificationController {
   static async markAllAsRead(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.id;
-      const notifications = await NotificationService.markAllAsRead(userId);
+      const notifications = await NotificationService.markAllAsRead(userId, req.tenantId);
       return sendSuccess(res, 'All notifications marked as read.', notifications);
     } catch (err) {
       next(err);
@@ -36,7 +36,7 @@ export class NotificationController {
   static async getUnreadCount(req: Request, res: Response, next: NextFunction) {
     try {
       const userId = req.user!.id;
-      const count = await NotificationService.getUnreadCount(userId);
+      const count = await NotificationService.getUnreadCount(userId, req.tenantId);
       return sendSuccess(res, 'Unread count fetched.', count);
     } catch (err) {
       next(err);

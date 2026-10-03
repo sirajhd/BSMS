@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import {
   Scissors,
   Calendar,
@@ -15,14 +16,17 @@ import {
 
 export const CustomerLayout: React.FC = () => {
   const { user, profile, logout } = useAuth();
+  const { tenant } = useTenant();
   const navigate = useNavigate();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [unreadCount] = useState<number>(1); // Mock unread notification counter for development
+  const [unreadCount] = useState<number>(0);
 
   const handleSignOut = () => {
     logout();
     navigate('/login', { replace: true });
   };
+
+  const shopName = tenant?.name || 'Crown & Blade';
 
   const navItems = [
     { label: 'Dashboard', path: '/customer/dashboard', icon: <Sparkles className="w-4 h-4" /> },
@@ -37,12 +41,12 @@ export const CustomerLayout: React.FC = () => {
       <header className="sticky top-0 z-30 border-b border-neutral-800 bg-neutral-900/80 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           {/* Logo */}
-          <Link to="/customer/dashboard" className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center">
+          <Link to="/customer/dashboard" className="flex items-center gap-2.5 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center shrink-0">
               <Scissors className="w-5 h-5" />
             </div>
-            <div>
-              <span className="font-bold text-base tracking-tight block">Crown & Blade</span>
+            <div className="min-w-0">
+              <span className="font-bold text-base tracking-tight block truncate">{shopName}</span>
               <span className="text-[10px] text-amber-500 font-medium uppercase tracking-wider block -mt-1">
                 Customer Portal
               </span>
@@ -171,7 +175,7 @@ export const CustomerLayout: React.FC = () => {
 
       {/* Footer */}
       <footer className="border-t border-neutral-800/80 py-4 text-center text-xs text-neutral-500">
-        <p>&copy; 2026 Crown & Blade Barber Shop. All rights reserved.</p>
+        <p>&copy; 2026 {shopName}. All rights reserved.</p>
       </footer>
     </div>
   );
