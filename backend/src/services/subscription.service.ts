@@ -155,7 +155,9 @@ export class SubscriptionService {
 
     // 1. Acquire advisory lock on tenant's barber quota
     try {
-      if (tx?.$queryRaw) {
+      if (tx?.$executeRaw) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_barber_limit_' + tenantId}))`;
+      } else if (tx?.$queryRaw) {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_barber_limit_' + tenantId}))`;
       }
     } catch (lockError) {
@@ -236,7 +238,9 @@ export class SubscriptionService {
 
     // 1. Acquire advisory lock on tenant's monthly appointment quota
     try {
-      if (tx?.$queryRaw) {
+      if (tx?.$executeRaw) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_limit_' + tenantId + '_' + monthPrefix}))`;
+      } else if (tx?.$queryRaw) {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_limit_' + tenantId + '_' + monthPrefix}))`;
       }
     } catch (lockError) {

@@ -343,7 +343,11 @@ export class AppointmentService {
 
       // Advisory transaction lock to serialize concurrent bookings for the specific barber and date (fail closed)
       try {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + input.barberId + '_' + input.appointmentDate}))`;
+        if (tx?.$executeRaw) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + input.barberId + '_' + input.appointmentDate}))`;
+        } else if (tx?.$queryRaw) {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + input.barberId + '_' + input.appointmentDate}))`;
+        }
       } catch (lockError) {
         console.error('Failed to acquire booking advisory transaction lock:', lockError);
         throw new AppError(
@@ -721,7 +725,11 @@ export class AppointmentService {
 
       // Advisory transaction lock for target barber and date (fail closed)
       try {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + targetBarberId + '_' + input.newDate}))`;
+        if (tx?.$executeRaw) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + targetBarberId + '_' + input.newDate}))`;
+        } else if (tx?.$queryRaw) {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + targetBarberId + '_' + input.newDate}))`;
+        }
       } catch (lockError) {
         console.error('Failed to acquire reschedule advisory transaction lock:', lockError);
         throw new AppError(
@@ -1099,7 +1107,11 @@ export class AppointmentService {
 
       // 1. Advisory transaction lock to serialize concurrent walk-in bookings for the specific barber and date (fail closed)
       try {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + barberProfileId + '_' + input.appointmentDate}))`;
+        if (tx?.$executeRaw) {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + barberProfileId + '_' + input.appointmentDate}))`;
+        } else if (tx?.$queryRaw) {
+          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + barberProfileId + '_' + input.appointmentDate}))`;
+        }
       } catch (lockError) {
         console.error('Failed to acquire walk-in advisory transaction lock:', lockError);
         throw new AppError(

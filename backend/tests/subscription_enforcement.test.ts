@@ -671,4 +671,43 @@ describe('SaaS Subscription & Plan Tier Enforcement Suite', () => {
       }
     );
   });
+
+  /**
+   * TEST P: Barber creation and checkBarberLimit use $executeRaw for advisory lock
+   */
+  it('TEST P: Barber creation executes $executeRaw for pg_advisory_xact_lock without void deserialization errors', async () => {
+    const tenantId = 'tenant-execute-raw-barber';
+    let executeRawCalled = false;
+    let queryRawCalled = false;
+
+    const mockTx = {
+      $executeRaw: async () => {
+        executeRawCalled = true;
+        return 1;
+      },
+      $queryRaw: async () => {
+        queryRawCalled = true;
+        return [];
+      },
+      subscription: {
+        findFirst: async () => ({
+          id: 'sub-p',
+          tenantId,
+          planId: 'plan-1',
+          status: SubscriptionStatus.ACTIVE,
+          currentPeriodStart: new Date(),
+          currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          plan: { id: 'plan-1', name: 'Starter', maxBarbers: 5, isActive: true },
+        }),
+      },
+      barber: { count: async () => 1 },
+    };
+
+    const res = await SubscriptionService.checkBarberLimit(tenantId, mockTx as any);
+    assert.strictEqual(res.currentCount, 1);
+    assert.strictEqual(res.limit, 5);
+    assert.strictEqual(executeRawCalled, true, '$executeRaw must be called for advisory lock');
+    assert.strictEqual(queryRawCalled, false, '$queryRaw must not be called when $executeRaw is available');
+  });
 });
+

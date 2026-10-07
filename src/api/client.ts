@@ -1,7 +1,7 @@
 import type { ApiResponse } from '../types';
 
 const BASE_URL =
-  import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  import.meta.env.VITE_API_URL || '/api';
 
 const STORAGE_KEY = 'bsms_auth_session';
 const TENANT_STORAGE_KEY = 'bsms_active_tenant_slug';
