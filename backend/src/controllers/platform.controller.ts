@@ -17,14 +17,31 @@ const createBusinessSchema = z.object({
     .max(50)
     .regex(/^[a-z0-9-]+$/, 'Slug must only contain lowercase alphanumeric characters and hyphens'),
   email: z.string().email('Valid business email is required').max(255),
-  phone: z.string().max(30).optional(),
-  address: z.string().max(255).optional(),
+  phone: z
+    .string()
+    .max(30)
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
+  address: z
+    .string()
+    .max(255)
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined)),
   timezone: z.string().max(50).default('Africa/Addis_Ababa'),
   currency: z.string().max(10).default('ETB'),
   ownerName: z.string().min(2, 'Owner full name is required').max(100),
   ownerEmail: z.string().email('Valid owner email is required').max(255),
-  ownerPassword: z.string().min(8, 'Owner password must be at least 8 characters').max(128).optional(),
-  planSlug: z.string().default('starter'),
+  ownerPassword: z
+    .string()
+    .max(128)
+    .optional()
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : undefined))
+    .refine((v) => !v || v.length >= 8, 'Owner password must be at least 8 characters'),
+  planSlug: z
+    .string()
+    .optional()
+    .default('starter')
+    .transform((v) => (v && v.trim().length > 0 ? v.trim() : 'starter')),
 });
 
 const updateBusinessSchema = z.object({
@@ -79,7 +96,17 @@ export class PlatformController {
           include: {
             memberships: {
               where: { role: Role.SHOP_OWNER },
-              include: { user: true },
+              include: {
+                user: {
+                  select: {
+                    id: true,
+                    email: true,
+                    role: true,
+                    isActive: true,
+                    createdAt: true,
+                  },
+                },
+              },
             },
             subscriptions: {
               include: { plan: true },
@@ -114,7 +141,13 @@ export class PlatformController {
           memberships: {
             include: {
               user: {
-                select: { id: true, email: true, isActive: true },
+                select: {
+                  id: true,
+                  email: true,
+                  role: true,
+                  isActive: true,
+                  createdAt: true,
+                },
               },
             },
           },
@@ -152,7 +185,12 @@ export class PlatformController {
           memberships: {
             include: {
               user: {
-                include: {
+                select: {
+                  id: true,
+                  email: true,
+                  role: true,
+                  isActive: true,
+                  createdAt: true,
                   customerProfile: true,
                   barberProfile: true,
                 },
@@ -319,7 +357,7 @@ export class PlatformController {
           },
         });
 
-        return { tenant, owner: ownerUser };
+        return { tenant, owner: AuthService.sanitizeUser(ownerUser) };
       });
 
       await AuditService.log({
@@ -443,7 +481,13 @@ export class PlatformController {
   static async getUsers(_req: Request, res: Response, next: NextFunction) {
     try {
       const users = await prisma.user.findMany({
-        include: {
+        select: {
+          id: true,
+          email: true,
+          role: true,
+          isActive: true,
+          createdAt: true,
+          updatedAt: true,
           customerProfile: true,
           barberProfile: true,
           memberships: {
@@ -460,7 +504,7 @@ export class PlatformController {
       return sendSuccess(
         res,
         'Users retrieved successfully.',
-        users.map((u) => AuthService.sanitizeUser(u))
+        users
       );
     } catch (err) {
       next(err);
@@ -537,6 +581,92 @@ export class PlatformController {
     try {
       const logs = await AuditService.getPlatformAuditLogs(300);
       return sendSuccess(res, 'Platform audit logs retrieved.', logs);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * SUPER_ADMIN: Change or upgrade/downgrade a tenant's subscription plan
+   */
+  static async changeTenantPlan(req: Request, res: Response, next: NextFunction) {
+    try {
+      const { planSlug } = z
+        .object({
+          planSlug: z.string().min(2, 'Plan slug is required').max(50),
+        })
+        .parse(req.body);
+
+      const tenantId = req.params.id;
+
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+      });
+      if (!tenant) {
+        throw new AppError('Business not found.', 404, 'BUSINESS_NOT_FOUND');
+      }
+
+      const plan = await prisma.plan.findUnique({
+        where: { slug: planSlug.toLowerCase() },
+      });
+      if (!plan || !plan.isActive) {
+        throw new AppError(
+          `Requested subscription plan '${planSlug}' was not found or is inactive.`,
+          400,
+          'INVALID_PLAN'
+        );
+      }
+
+      const updatedSubscription = await prisma.$transaction(async (tx) => {
+        const existingSub = await tx.subscription.findFirst({
+          where: { tenantId },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        if (existingSub) {
+          return tx.subscription.update({
+            where: { id: existingSub.id },
+            data: {
+              planId: plan.id,
+              status: SubscriptionStatus.ACTIVE,
+              currentPeriodStart: new Date(),
+              currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            },
+            include: { plan: true },
+          });
+        } else {
+          return tx.subscription.create({
+            data: {
+              tenantId,
+              planId: plan.id,
+              status: SubscriptionStatus.ACTIVE,
+              currentPeriodStart: new Date(),
+              currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            },
+            include: { plan: true },
+          });
+        }
+      });
+
+      await AuditService.log({
+        tenantId,
+        actorUserId: req.user?.id,
+        action: 'PLAN_CHANGED',
+        entity: 'Subscription',
+        entityId: updatedSubscription.id,
+        metadata: {
+          newPlan: plan.name,
+          newPlanSlug: plan.slug,
+          maxBarbers: plan.maxBarbers,
+          maxMonthlyAppointments: plan.maxMonthlyAppointments,
+        },
+      });
+
+      return sendSuccess(
+        res,
+        `Business subscription successfully updated to ${plan.name}.`,
+        updatedSubscription
+      );
     } catch (err) {
       next(err);
     }

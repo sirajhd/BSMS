@@ -162,22 +162,37 @@ export class AuthService {
     }
 
     // Determine effective role & active tenant
-    let resolvedTenantId = activeTenantId;
+    let resolvedTenantId: string | undefined = undefined;
     let effectiveRole: Role = user.role;
 
     if (user.role === Role.SUPER_ADMIN) {
       effectiveRole = Role.SUPER_ADMIN;
-    } else if (activeTenantId) {
-      const activeMembership = user.memberships.find(
-        (m) => m.tenantId === activeTenantId && m.isActive
-      );
-      if (activeMembership) {
+      resolvedTenantId = activeTenantId;
+    } else {
+      const activeMemberships = user.memberships.filter((m) => m.isActive);
+
+      if (activeTenantId) {
+        const activeMembership = activeMemberships.find((m) => m.tenantId === activeTenantId);
+        if (!activeMembership) {
+          throw new AppError(
+            'You do not have an active membership for this tenant.',
+            403,
+            'NOT_TENANT_MEMBER'
+          );
+        }
+        resolvedTenantId = activeMembership.tenantId;
         effectiveRole = activeMembership.role;
+      } else {
+        if (activeMemberships.length === 0) {
+          throw new AppError(
+            'Your tenant membership has been deactivated. Please contact support.',
+            403,
+            'MEMBERSHIP_INACTIVE'
+          );
+        }
+        resolvedTenantId = activeMemberships[0].tenantId;
+        effectiveRole = activeMemberships[0].role;
       }
-    } else if (user.memberships.length > 0) {
-      const firstActive = user.memberships.find((m) => m.isActive) || user.memberships[0];
-      resolvedTenantId = firstActive.tenantId;
-      effectiveRole = firstActive.role;
     }
 
     const token = this.generateToken({
@@ -249,19 +264,26 @@ export class AuthService {
       throw new AppError('User not found.', 404, 'USER_NOT_FOUND');
     }
 
+    let resolvedTenantId: string | undefined = undefined;
     let effectiveRole: Role = user.role;
+
     if (user.role === Role.SUPER_ADMIN) {
       effectiveRole = Role.SUPER_ADMIN;
-    } else if (activeTenantId) {
-      const activeMembership = user.memberships.find(
-        (m) => m.tenantId === activeTenantId && m.isActive
-      );
-      if (activeMembership) {
-        effectiveRole = activeMembership.role;
+      resolvedTenantId = activeTenantId;
+    } else {
+      const activeMemberships = user.memberships.filter((m) => m.isActive);
+      if (activeTenantId) {
+        const activeMembership = activeMemberships.find(
+          (m) => m.tenantId === activeTenantId
+        );
+        if (activeMembership) {
+          effectiveRole = activeMembership.role;
+          resolvedTenantId = activeMembership.tenantId;
+        }
+      } else if (activeMemberships.length > 0) {
+        resolvedTenantId = activeMemberships[0].tenantId;
+        effectiveRole = activeMemberships[0].role;
       }
-    } else if (user.memberships.length > 0) {
-      const firstActive = user.memberships.find((m) => m.isActive) || user.memberships[0];
-      effectiveRole = firstActive.role;
     }
 
     const profile = user.customerProfile || user.barberProfile;
@@ -273,7 +295,7 @@ export class AuthService {
         role: effectiveRole,
         platformRole: user.role,
         isActive: user.isActive,
-        activeTenantId: activeTenantId || user.memberships[0]?.tenantId,
+        activeTenantId: resolvedTenantId,
         memberships: user.memberships.map((m) => ({
           id: m.id,
           tenantId: m.tenantId,

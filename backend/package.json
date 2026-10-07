@@ -12,7 +12,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
-    "test": "tsx --test tests/app.test.ts tests/availability.test.ts tests/auth.test.ts tests/rbac.test.ts tests/tenant_resolver.test.ts tests/saas_isolation.test.ts tests/security_hardening.test.ts"
+    "test": "tsx --test tests/app.test.ts tests/availability.test.ts tests/auth.test.ts tests/rbac.test.ts tests/tenant_resolver.test.ts tests/saas_isolation.test.ts tests/security_hardening.test.ts tests/tenant_provisioning.test.ts tests/subscription_enforcement.test.ts tests/manager_management.test.ts tests/manager_http_functional.test.ts tests/inactive_membership_auth.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1",

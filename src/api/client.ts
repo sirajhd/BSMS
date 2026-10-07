@@ -59,7 +59,8 @@ export function getClientTenantSlug(): string | null {
     // Ignore
   }
 
-  return null;
+  // 3. In development/local preview environments without subdomain, default to seeded demo tenant
+  return 'demo-shop';
 }
 
 export async function apiClient<T>(

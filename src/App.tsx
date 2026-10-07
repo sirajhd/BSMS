@@ -58,7 +58,7 @@ export const App: React.FC = () => {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />
 
-            {/* Platform Super Admin Routes (Strictly SUPER_ADMIN protected) */}
+            {/* Platform Super Admin Routes */}
             <Route
               path="/platform"
               element={
@@ -75,11 +75,19 @@ export const App: React.FC = () => {
               <Route path="businesses/:id" element={<BusinessDetailsPage />} />
               <Route path="users" element={<PlatformUsersPage />} />
               <Route path="plans" element={<PlatformPlansPage />} />
-              <Route path="logs" element={<PlatformAuditLogsPage />} />
+              <Route path="audit-logs" element={<PlatformAuditLogsPage />} />
+              <Route path="logs" element={<Navigate to="/platform/audit-logs" replace />} />
               <Route path="*" element={<Navigate to="dashboard" replace />} />
             </Route>
 
-            {/* Customer Routes (Protected + Role Guard) */}
+            {/* Super Admin Route Aliases */}
+            <Route path="/super-admin" element={<Navigate to="/platform/dashboard" replace />} />
+            <Route path="/super-admin/dashboard" element={<Navigate to="/platform/dashboard" replace />} />
+            <Route path="/super-admin/tenants" element={<Navigate to="/platform/businesses" replace />} />
+            <Route path="/super-admin/tenants/:id" element={<Navigate to="/platform/businesses/:id" replace />} />
+            <Route path="/super-admin/*" element={<Navigate to="/platform/dashboard" replace />} />
+
+            {/* Customer Routes */}
             <Route
               path="/customer"
               element={
@@ -100,7 +108,7 @@ export const App: React.FC = () => {
               <Route path="*" element={<Navigate to="dashboard" replace />} />
             </Route>
 
-            {/* Barber Routes (Protected + Role Guard) */}
+            {/* Barber Routes */}
             <Route
               path="/barber"
               element={
@@ -120,7 +128,7 @@ export const App: React.FC = () => {
               <Route path="*" element={<Navigate to="dashboard" replace />} />
             </Route>
 
-            {/* Admin / Shop Owner Routes (Protected + Role Guard) */}
+            {/* Admin / Shop Owner / Manager Routes */}
             <Route
               path="/admin"
               element={

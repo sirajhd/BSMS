@@ -11,6 +11,7 @@ import authRoutes from './routes/auth.routes.js';
 import tenantRoutes from './routes/tenant.routes.js';
 import platformRoutes from './routes/platform.routes.js';
 import serviceRoutes from './routes/service.routes.js';
+import managerRoutes from './routes/manager.routes.js';
 import barberRoutes from './routes/barber.routes.js';
 import customerRoutes from './routes/customer.routes.js';
 import scheduleRoutes from './routes/schedule.routes.js';
@@ -108,6 +109,7 @@ export const createApp = () => {
   app.use('/api/tenant', tenantRoutes);
   app.use('/api/platform', platformRoutes);
   app.use('/api/services', serviceRoutes);
+  app.use('/api/managers', managerRoutes);
   app.use('/api/barbers', barberRoutes);
   app.use('/api/customers', customerRoutes);
   app.use('/api/business-schedule', scheduleRoutes);

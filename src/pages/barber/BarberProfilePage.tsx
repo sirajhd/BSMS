@@ -1,3 +1,4 @@
+import { authApi } from '../../api/auth.api';
 import React, { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card } from '../../components/common/Card';
@@ -59,7 +60,7 @@ export const BarberProfilePage: React.FC = () => {
 
     setIsSavingProfile(true);
     try {
-      const { authApi } = await import('../../api/auth.api');
+      
       await authApi.updateProfile({
         fullName: fullName.trim(),
         phone: phone.trim(),
@@ -96,7 +97,7 @@ export const BarberProfilePage: React.FC = () => {
 
     setIsUpdatingPassword(true);
     try {
-      const { authApi } = await import('../../api/auth.api');
+      
       await authApi.changePassword(currentPassword, newPassword);
       setIsUpdatingPassword(false);
       setPasswordSuccess('Security credentials updated successfully.');

@@ -3,6 +3,7 @@ import { Role } from '@prisma/client';
 import prisma from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AuditService } from './audit.service.js';
+import { SubscriptionService } from './subscription.service.js';
 import type {
   CreateBarberInput,
   UpdateBarberInput,
@@ -122,6 +123,9 @@ export class BarberService {
     const passwordHash = await bcrypt.hash(input.password, 10);
 
     const result = await prisma.$transaction(async (tx) => {
+      // 1. Enforce SaaS Subscription Plan maxBarbers limit within transaction
+      await SubscriptionService.checkBarberLimit(tenantId, tx);
+
       const user = await tx.user.create({
         data: {
           email: input.email.toLowerCase(),
@@ -192,19 +196,30 @@ export class BarberService {
     tenantId?: string,
     actorUserId?: string
   ) {
-    await this.getBarberById(id, tenantId);
+    if (!tenantId) {
+      throw new AppError('Tenant context is required.', 400, 'TENANT_REQUIRED');
+    }
 
-    const updated = await prisma.barber.update({
-      where: { id },
-      data: {
-        fullName: input.fullName,
-        phone: input.phone,
-        profileImage: input.profileImage !== undefined ? input.profileImage : undefined,
-        isActive: input.isActive,
-      },
-      include: {
-        availability: true,
-      },
+    const current = await this.getBarberById(id, tenantId);
+    const isActivating = input.isActive === true && current.isActive === false;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (isActivating) {
+        await SubscriptionService.checkBarberLimit(tenantId, tx);
+      }
+
+      return tx.barber.update({
+        where: { id },
+        data: {
+          fullName: input.fullName,
+          phone: input.phone,
+          profileImage: input.profileImage !== undefined ? input.profileImage : undefined,
+          isActive: input.isActive,
+        },
+        include: {
+          availability: true,
+        },
+      });
     });
 
     await AuditService.log({
@@ -220,13 +235,24 @@ export class BarberService {
   }
 
   static async toggleBarberStatus(id: string, tenantId?: string, actorUserId?: string) {
-    const current = await this.getBarberById(id, tenantId);
+    if (!tenantId) {
+      throw new AppError('Tenant context is required.', 400, 'TENANT_REQUIRED');
+    }
 
-    const updated = await prisma.barber.update({
-      where: { id },
-      data: {
-        isActive: !current.isActive,
-      },
+    const current = await this.getBarberById(id, tenantId);
+    const willActivate = !current.isActive;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      if (willActivate) {
+        await SubscriptionService.checkBarberLimit(tenantId, tx);
+      }
+
+      return tx.barber.update({
+        where: { id },
+        data: {
+          isActive: willActivate,
+        },
+      });
     });
 
     await AuditService.log({

@@ -3,6 +3,7 @@ import prisma from '../config/prisma.js';
 import { sendSuccess } from '../utils/response.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AuditService } from '../services/audit.service.js';
+import { SubscriptionService } from '../services/subscription.service.js';
 import { z } from 'zod';
 
 const updateTenantSettingsSchema = z.object({
@@ -34,8 +35,9 @@ export class TenantController {
         include: {
           settings: true,
           subscriptions: {
-            where: { status: 'ACTIVE' },
+            where: { status: { in: ['ACTIVE', 'TRIAL'] } },
             include: { plan: true },
+            orderBy: { createdAt: 'desc' },
             take: 1,
           },
         },
@@ -44,6 +46,8 @@ export class TenantController {
       if (!tenant) {
         throw new AppError('Tenant not found.', 404, 'TENANT_NOT_FOUND');
       }
+
+      const activeSub = tenant.subscriptions[0];
 
       const publicInfo = {
         id: tenant.id,
@@ -64,16 +68,38 @@ export class TenantController {
           cancellationCutoffHours: 2,
           allowWalkIns: true,
         },
-        plan: tenant.subscriptions[0]?.plan
+        plan: activeSub?.plan
           ? {
-              name: tenant.subscriptions[0].plan.name,
-              slug: tenant.subscriptions[0].plan.slug,
-              features: tenant.subscriptions[0].plan.features,
+              id: activeSub.plan.id,
+              name: activeSub.plan.name,
+              slug: activeSub.plan.slug,
+              features: activeSub.plan.features,
+              maxBarbers: activeSub.plan.maxBarbers,
+              maxMonthlyAppointments: activeSub.plan.maxMonthlyAppointments,
+              price: activeSub.plan.price,
+              interval: activeSub.plan.interval,
             }
           : null,
       };
 
       return sendSuccess(res, 'Tenant context fetched successfully.', publicInfo);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * Owner/Manager: Get tenant subscription usage & plan limits
+   */
+  static async getUsage(req: Request, res: Response, next: NextFunction) {
+    try {
+      const tenantId = req.tenantId;
+      if (!tenantId) {
+        throw new AppError('Tenant context required.', 400, 'TENANT_REQUIRED');
+      }
+
+      const usage = await SubscriptionService.getTenantUsage(tenantId);
+      return sendSuccess(res, 'Tenant subscription usage retrieved.', usage);
     } catch (err) {
       next(err);
     }

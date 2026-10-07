@@ -9,6 +9,7 @@ import prisma from '../config/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { AvailabilityService } from './availability.service.js';
 import { AuditService } from './audit.service.js';
+import { SubscriptionService } from './subscription.service.js';
 import type {
   CreateAppointmentInput,
   RescheduleAppointmentInput,
@@ -210,8 +211,20 @@ export class AppointmentService {
         tenantId,
       },
       include: {
-        customer: { include: { user: true } },
-        barber: { include: { user: true } },
+        customer: {
+          include: {
+            user: {
+              select: { id: true, email: true, role: true, isActive: true },
+            },
+          },
+        },
+        barber: {
+          include: {
+            user: {
+              select: { id: true, email: true, role: true, isActive: true },
+            },
+          },
+        },
         service: true,
       },
     });
@@ -321,6 +334,13 @@ export class AppointmentService {
 
     // 4. Atomically check availability and insert appointment in transaction using transaction client
     const created = await prisma.$transaction(async (tx) => {
+      // 0. Enforce SaaS Subscription Plan maxMonthlyAppointments limit inside transaction
+      await SubscriptionService.checkMonthlyAppointmentLimit(
+        tenantId,
+        input.appointmentDate,
+        tx
+      );
+
       // Advisory transaction lock to serialize concurrent bookings for the specific barber and date (fail closed)
       try {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + input.barberId + '_' + input.appointmentDate}))`;
@@ -391,8 +411,20 @@ export class AppointmentService {
           serviceDurationSnapshot: service.durationMinutes,
         },
         include: {
-          customer: { include: { user: true } },
-          barber: { include: { user: true } },
+          customer: {
+            include: {
+              user: {
+                select: { id: true, email: true, role: true, isActive: true },
+              },
+            },
+          },
+          barber: {
+            include: {
+              user: {
+                select: { id: true, email: true, role: true, isActive: true },
+              },
+            },
+          },
           service: true,
         },
       });
@@ -516,8 +548,20 @@ export class AppointmentService {
       const cancelled = await tx.appointment.findUnique({
         where: { id: appointmentId },
         include: {
-          customer: { include: { user: true } },
-          barber: { include: { user: true } },
+          customer: {
+            include: {
+              user: {
+                select: { id: true, email: true, role: true, isActive: true },
+              },
+            },
+          },
+          barber: {
+            include: {
+              user: {
+                select: { id: true, email: true, role: true, isActive: true },
+              },
+            },
+          },
           service: true,
         },
       });
@@ -663,6 +707,18 @@ export class AppointmentService {
     );
 
     const updated = await prisma.$transaction(async (tx) => {
+      // If moving to a different calendar month, verify capacity in target month
+      if (
+        apt.appointmentDate &&
+        input.newDate.substring(0, 7) !== apt.appointmentDate.substring(0, 7)
+      ) {
+        await SubscriptionService.checkMonthlyAppointmentLimit(
+          tenantId,
+          input.newDate,
+          tx
+        );
+      }
+
       // Advisory transaction lock for target barber and date (fail closed)
       try {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + targetBarberId + '_' + input.newDate}))`;
@@ -739,8 +795,20 @@ export class AppointmentService {
       const rescheduled = await tx.appointment.findUnique({
         where: { id: appointmentId },
         include: {
-          customer: { include: { user: true } },
-          barber: { include: { user: true } },
+          customer: {
+            include: {
+              user: {
+                select: { id: true, email: true, role: true, isActive: true },
+              },
+            },
+          },
+          barber: {
+            include: {
+              user: {
+                select: { id: true, email: true, role: true, isActive: true },
+              },
+            },
+          },
           service: true,
         },
       });
@@ -892,8 +960,20 @@ export class AppointmentService {
       const result = await tx.appointment.findUnique({
         where: { id: appointmentId },
         include: {
-          customer: { include: { user: true } },
-          barber: { include: { user: true } },
+          customer: {
+            include: {
+              user: {
+                select: { id: true, email: true, role: true, isActive: true },
+              },
+            },
+          },
+          barber: {
+            include: {
+              user: {
+                select: { id: true, email: true, role: true, isActive: true },
+              },
+            },
+          },
           service: true,
         },
       });
@@ -1010,6 +1090,13 @@ export class AppointmentService {
     );
 
     const created = await prisma.$transaction(async (tx) => {
+      // 0. Enforce SaaS Subscription Plan maxMonthlyAppointments limit inside transaction
+      await SubscriptionService.checkMonthlyAppointmentLimit(
+        tenantId,
+        input.appointmentDate,
+        tx
+      );
+
       // 1. Advisory transaction lock to serialize concurrent walk-in bookings for the specific barber and date (fail closed)
       try {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${'bsms_apt_lock_' + tenantId + '_' + barberProfileId + '_' + input.appointmentDate}))`;

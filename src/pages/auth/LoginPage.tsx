@@ -10,7 +10,7 @@ import { Eye, EyeOff, Lock, Mail, Scissors, AlertCircle, ShieldCheck } from 'luc
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { login, user } = useAuth();
+  const { login } = useAuth();
   const { tenant } = useTenant();
 
   const [email, setEmail] = useState('');
@@ -43,11 +43,15 @@ export const LoginPage: React.FC = () => {
     if (from) {
       navigate(from, { replace: true });
     } else {
-      if (email.includes('superadmin') || user?.role === 'SUPER_ADMIN' || user?.platformRole === 'SUPER_ADMIN') {
+      const loggedUser = result.user;
+      const role = loggedUser?.role;
+      const platformRole = loggedUser?.platformRole;
+
+      if (platformRole === 'SUPER_ADMIN' || role === 'SUPER_ADMIN') {
         navigate('/platform/dashboard', { replace: true });
-      } else if (email.includes('admin') || email.includes('owner') || email.includes('manager') || user?.role === 'SHOP_OWNER' || user?.role === 'MANAGER' || user?.role === 'ADMIN') {
+      } else if (role === 'SHOP_OWNER' || role === 'MANAGER' || role === 'ADMIN') {
         navigate('/admin/dashboard', { replace: true });
-      } else if (email.includes('barber') || user?.role === 'BARBER') {
+      } else if (role === 'BARBER') {
         navigate('/barber/dashboard', { replace: true });
       } else {
         navigate('/customer/dashboard', { replace: true });

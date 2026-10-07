@@ -105,6 +105,13 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
       memberships: user.memberships,
     };
 
+    if (!req.tenantId && currentTenantId) {
+      req.tenantId = currentTenantId;
+      if (!req.tenant && activeMembership && 'tenant' in activeMembership) {
+        req.tenant = (activeMembership as any).tenant;
+      }
+    }
+
     next();
   } catch (err) {
     if (err instanceof jwt.JsonWebTokenError || err instanceof jwt.TokenExpiredError) {

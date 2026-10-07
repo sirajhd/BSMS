@@ -9,14 +9,14 @@ interface AuthContextType {
   isLoading: boolean;
   activeTenantId: string | null;
   memberships: Membership[];
-  login: (email: string, password: string) => Promise<{ success: boolean; message: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; message: string; user?: User }>;
   register: (data: {
     fullName: string;
     phone: string;
     email: string;
     password: string;
     profileImage?: string;
-  }) => Promise<{ success: boolean; message: string }>;
+  }) => Promise<{ success: boolean; message: string; user?: User }>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   hasRole: (...roles: Role[]) => boolean;
@@ -79,7 +79,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     initializeAuth();
   }, []);
 
-  const login = async (email: string, password: string): Promise<{ success: boolean; message: string }> => {
+  const login = async (email: string, password: string): Promise<{ success: boolean; message: string; user?: User }> => {
     setIsLoading(true);
 
     try {
@@ -98,8 +98,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         })
       );
 
+      // Synchronize active tenant slug if user belongs to a tenant
+      const activeTenantSlug = result.user.memberships?.[0]?.tenant?.slug;
+      if (activeTenantSlug) {
+        localStorage.setItem('bsms_active_tenant_slug', activeTenantSlug);
+      }
+
       setIsLoading(false);
-      return { success: true, message: 'Logged in successfully.' };
+      return { success: true, message: 'Logged in successfully.', user: result.user };
     } catch (apiError: any) {
       setIsLoading(false);
       return {
@@ -115,7 +121,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     email: string;
     password: string;
     profileImage?: string;
-  }): Promise<{ success: boolean; message: string }> => {
+  }): Promise<{ success: boolean; message: string; user?: User }> => {
     setIsLoading(true);
 
     try {
@@ -134,8 +140,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         })
       );
 
+      const activeTenantSlug = result.user.memberships?.[0]?.tenant?.slug;
+      if (activeTenantSlug) {
+        localStorage.setItem('bsms_active_tenant_slug', activeTenantSlug);
+      }
+
       setIsLoading(false);
-      return { success: true, message: 'Account registered successfully.' };
+      return { success: true, message: 'Account registered successfully.', user: result.user };
     } catch (apiError: any) {
       setIsLoading(false);
       return {

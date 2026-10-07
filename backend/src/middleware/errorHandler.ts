@@ -38,7 +38,7 @@ export const errorHandler = (
     return sendError(res, 'Validation failed. Please check your inputs.', 422, 'VALIDATION_ERROR', formattedErrors);
   }
 
-  console.error('âŒ Unhandled Server Error:', err);
+  console.error('❌ Unhandled Server Error:', err);
 
   const message = process.env.NODE_ENV === 'production'
     ? 'An internal server error occurred.'

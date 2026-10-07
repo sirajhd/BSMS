@@ -1,7 +1,9 @@
 import type { Request, Response, NextFunction } from 'express';
 import prisma from '../config/prisma.js';
 import { AppError } from './errorHandler.js';
-import type { Tenant, TenantSettings } from '@prisma/client';
+import jwt from 'jsonwebtoken';
+import { env } from '../config/env.js';
+import type { Tenant, TenantSettings, Role } from '@prisma/client';
 
 export type TenantWithSettings = Tenant & {
   settings?: TenantSettings | null;
@@ -55,9 +57,10 @@ export function extractTenantSlug(req: Request): string | null {
     return null;
   }
 
-  // Subdomain on bsms.com (e.g. "sirajbarbers.bsms.com")
+  // Subdomain on bsms.com (e.g. "sirajbarbers.bsms.com" or "www.sirajbarbers.bsms.com")
   if (rawHost.endsWith('.bsms.com')) {
-    const sub = rawHost.replace('.bsms.com', '');
+    let sub = rawHost.replace('.bsms.com', '');
+    if (sub.startsWith('www.')) sub = sub.replace(/^www\./, '');
     if (sub && !ignoredRootDomains.includes(sub) && /^[a-z0-9-]+$/.test(sub)) {
       return sub;
     }
@@ -65,7 +68,8 @@ export function extractTenantSlug(req: Request): string | null {
 
   // Subdomain on localhost (e.g. "sirajbarbers.localhost")
   if (rawHost.endsWith('.localhost')) {
-    const sub = rawHost.replace('.localhost', '');
+    let sub = rawHost.replace('.localhost', '');
+    if (sub.startsWith('www.')) sub = sub.replace(/^www\./, '');
     if (sub && !ignoredRootDomains.includes(sub) && /^[a-z0-9-]+$/.test(sub)) {
       return sub;
     }
@@ -74,7 +78,10 @@ export function extractTenantSlug(req: Request): string | null {
   // Subdomain on arbitrary host (e.g. "sirajbarbers.example.com")
   const parts = rawHost.split('.');
   if (parts.length > 2) {
-    const sub = parts[0];
+    let sub = parts[0];
+    if (sub === 'www' && parts.length > 3) {
+      sub = parts[1];
+    }
     if (/^[a-z0-9-]+$/.test(sub) && !ignoredRootDomains.includes(sub)) {
       return sub;
     }
@@ -85,8 +92,10 @@ export function extractTenantSlug(req: Request): string | null {
 
 /**
  * Middleware: Resolves tenant context from hostname/header and attaches to Request.
- * Note: Tenant resolution is only a context-hint; authentication & membership verification
- * must always be performed to authorize actual tenant operations.
+ * For unauthenticated requests, resolves tenant from hostname or x-tenant-slug.
+ * For authenticated requests, enforces that the effective tenant matches the user's active membership,
+ * or automatically resolves to the user's active membership tenant if no tenant was specified in domain.
+ * Cross-tenant spoofing attempts by authenticated tenant users fail closed with 403 NOT_TENANT_MEMBER.
  */
 export const resolveTenant = async (req: Request, _res: Response, next: NextFunction) => {
   try {
@@ -105,9 +114,92 @@ export const resolveTenant = async (req: Request, _res: Response, next: NextFunc
       return next();
     }
 
-    if (tenant) {
+    // Check for authenticated caller via Bearer token
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      try {
+        const decoded = jwt.verify(token, env.JWT_SECRET) as {
+          id: string;
+          email: string;
+          role: Role;
+          tenantId?: string;
+        };
+
+        if (decoded && decoded.id) {
+          const user = await prisma.user.findUnique({
+            where: { id: decoded.id },
+            include: {
+              customerProfile: true,
+              barberProfile: true,
+              memberships: {
+                include: { tenant: { include: { settings: true } } },
+              },
+            },
+          });
+
+          if (user && user.isActive) {
+            if (user.role === 'SUPER_ADMIN') {
+              // Super Admin has platform-wide clearance to operate across tenants
+              if (tenant) {
+                req.tenant = tenant;
+                req.tenantId = tenant.id;
+              }
+            } else {
+              // Authenticated tenant user (SHOP_OWNER, MANAGER, BARBER, CUSTOMER, ADMIN)
+              if (tenant) {
+                // If a tenant was requested via domain / header, verify active membership
+                const matchingMembership = user.memberships.find(
+                  (m) => m.tenantId === tenant!.id && m.isActive
+                );
+
+                if (!matchingMembership) {
+                  // Cross-tenant spoofing or unauthorized tenant access attempt
+                  return next(
+                    new AppError(
+                      'Forbidden. You do not have an active membership in this business.',
+                      403,
+                      'NOT_TENANT_MEMBER'
+                    )
+                  );
+                }
+
+                req.tenant = tenant;
+                req.tenantId = tenant.id;
+              } else {
+                // If no tenant was specified in domain/header (e.g. localhost or apex),
+                // bind the user's authoritative active membership tenant
+                const targetTenantId = decoded.tenantId;
+                let activeMembership = targetTenantId
+                  ? user.memberships.find((m) => m.tenantId === targetTenantId && m.isActive)
+                  : null;
+
+                if (!activeMembership) {
+                  activeMembership = user.memberships.find((m) => m.isActive) || null;
+                }
+
+                if (activeMembership && (activeMembership as any).tenant) {
+                  req.tenant = (activeMembership as any).tenant;
+                  req.tenantId = activeMembership.tenantId;
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // Token invalid or expired - ignore here; if route requires auth, authenticate middleware will reject
+      }
+    } else {
+      // Unauthenticated request
+      if (tenant) {
+        req.tenant = tenant;
+        req.tenantId = tenant.id;
+      }
+    }
+
+    if (req.tenant) {
       // Check tenant status - block mutations if SUSPENDED or ARCHIVED
-      if (tenant.status === 'SUSPENDED' && !req.path.startsWith('/api/platform')) {
+      if (req.tenant.status === 'SUSPENDED' && !req.path.startsWith('/api/platform')) {
         if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
           return next(
             new AppError(
@@ -119,7 +211,7 @@ export const resolveTenant = async (req: Request, _res: Response, next: NextFunc
         }
       }
 
-      if (tenant.status === 'ARCHIVED' && !req.path.startsWith('/api/platform')) {
+      if (req.tenant.status === 'ARCHIVED' && !req.path.startsWith('/api/platform')) {
         if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
           return next(
             new AppError(
@@ -130,9 +222,6 @@ export const resolveTenant = async (req: Request, _res: Response, next: NextFunc
           );
         }
       }
-
-      req.tenant = tenant;
-      req.tenantId = tenant.id;
     }
 
     next();

@@ -9,6 +9,7 @@ import { ServiceService } from '../src/services/service.service.js';
 import { BarberService } from '../src/services/barber.service.js';
 import { NotificationService } from '../src/services/notification.service.js';
 import { AuditService } from '../src/services/audit.service.js';
+import { PlatformController } from '../src/controllers/platform.controller.js';
 import { AppError } from '../src/middleware/errorHandler.js';
 import prisma from '../src/config/prisma.js';
 import { Role, PaymentStatus, AppointmentStatus, PaymentMethod } from '@prisma/client';
@@ -425,7 +426,7 @@ describe('BSMS Security Hardening & Tenant Isolation Regression Suite', () => {
     });
   });
 
-  describe('10. Platform SUPER_ADMIN Route Protection', () => {
+  describe('10. Platform SUPER_ADMIN Route Protection & Credential Sanitization', () => {
     it('rejects non-superadmin users from accessing requireSuperAdmin with 403', () => {
       const req = {
         user: {
@@ -445,6 +446,191 @@ describe('BSMS Security Hardening & Tenant Isolation Regression Suite', () => {
       assert.ok(errorResult instanceof AppError);
       assert.strictEqual(errorResult.statusCode, 403);
       assert.strictEqual(errorResult.code, 'SUPER_ADMIN_REQUIRED');
+    });
+
+    it('GET /api/platform/overview returns 200 for SUPER_ADMIN with required stats and safe user details (excluding passwordHash)', async () => {
+      const origTenantCount = prisma.tenant.count;
+      const origUserCount = prisma.user.count;
+      const origAptCount = prisma.appointment.count;
+      const origPaymentAgg = prisma.payment.aggregate;
+      const origTenantFindMany = prisma.tenant.findMany;
+
+      try {
+        (prisma as any).tenant.count = async () => 10;
+        (prisma as any).user.count = async () => 25;
+        (prisma as any).appointment.count = async () => 50;
+        (prisma as any).payment.aggregate = async () => ({ _sum: { amount: 15000 } });
+        (prisma as any).tenant.findMany = async (args: any) => {
+          // Verify that query uses explicit user selection without passwordHash
+          assert.deepStrictEqual(args?.include?.memberships?.include?.user?.select, {
+            id: true,
+            email: true,
+            role: true,
+            isActive: true,
+            createdAt: true,
+          });
+
+          return [
+            {
+              id: 'tenant-101',
+              name: 'Urban Blade Lounge',
+              slug: 'urban-blade',
+              email: 'info@urbanblade.com',
+              status: 'ACTIVE',
+              currency: 'ETB',
+              createdAt: new Date('2026-10-01T00:00:00Z'),
+              memberships: [
+                {
+                  id: 'mem-1',
+                  role: Role.SHOP_OWNER,
+                  isActive: true,
+                  user: {
+                    id: 'user-owner-1',
+                    email: 'owner@urbanblade.com',
+                    role: Role.SHOP_OWNER,
+                    isActive: true,
+                    createdAt: new Date('2026-10-01T00:00:00Z'),
+                  },
+                },
+              ],
+              subscriptions: [
+                {
+                  id: 'sub-1',
+                  status: 'ACTIVE',
+                  plan: { id: 'plan-pro', name: 'Pro Tier', slug: 'pro' },
+                },
+              ],
+            },
+          ];
+        };
+
+        const req = {
+          user: {
+            id: 'super-admin-1',
+            email: 'admin@platform.com',
+            role: Role.SUPER_ADMIN,
+            platformRole: Role.SUPER_ADMIN,
+          },
+        } as unknown as Request;
+
+        let resStatusCode = 200;
+        let resPayload: any = null;
+        const res = {
+          status(code: number) {
+            resStatusCode = code;
+            return this;
+          },
+          json(payload: any) {
+            resPayload = payload;
+            return this;
+          },
+        } as unknown as Response;
+
+        let nextCalled = false;
+        await PlatformController.getOverview(req, res, () => {
+          nextCalled = true;
+        });
+
+        assert.strictEqual(nextCalled, false, 'next() should not be called on success');
+        assert.strictEqual(resStatusCode, 200, 'HTTP status must be 200');
+        assert.strictEqual(resPayload.success, true, 'API success must be true');
+        assert.ok(resPayload.data, 'Response data must exist');
+        assert.strictEqual(resPayload.data.totalTenants, 10);
+        assert.strictEqual(resPayload.data.totalRevenue, 15000);
+        assert.strictEqual(resPayload.data.recentTenants.length, 1);
+
+        const tenant = resPayload.data.recentTenants[0];
+        assert.strictEqual(tenant.id, 'tenant-101');
+        assert.strictEqual(tenant.memberships[0].user.email, 'owner@urbanblade.com');
+        assert.strictEqual(tenant.memberships[0].user.id, 'user-owner-1');
+        assert.strictEqual(tenant.memberships[0].user.role, Role.SHOP_OWNER);
+        assert.strictEqual(tenant.memberships[0].user.isActive, true);
+
+        // CRITICAL SECURITY ASSERTIONS:
+        const serialized = JSON.stringify(resPayload);
+        assert.strictEqual(
+          serialized.includes('passwordHash'),
+          false,
+          'passwordHash MUST NOT appear anywhere in the platform overview response JSON'
+        );
+        assert.strictEqual(
+          'passwordHash' in tenant.memberships[0].user,
+          false,
+          'passwordHash field must not exist on user object'
+        );
+
+        // Verify no sensitive credential fields exist across the response tree
+        const forbiddenKeys = ['passwordHash', 'password', 'resetToken', 'refreshToken', 'tokenSecret', 'secret'];
+        const checkObjectKeys = (obj: any) => {
+          if (!obj || typeof obj !== 'object') return;
+          for (const key of Object.keys(obj)) {
+            assert.strictEqual(
+              forbiddenKeys.includes(key),
+              false,
+              `Forbidden credential key '${key}' detected in platform overview response`
+            );
+            checkObjectKeys(obj[key]);
+          }
+        };
+        checkObjectKeys(resPayload);
+      } finally {
+        (prisma as any).tenant.count = origTenantCount;
+        (prisma as any).user.count = origUserCount;
+        (prisma as any).appointment.count = origAptCount;
+        (prisma as any).payment.aggregate = origPaymentAgg;
+        (prisma as any).tenant.findMany = origTenantFindMany;
+      }
+    });
+
+    it('PlatformController.getBusinesses and getBusinessById use explicit safe user projection without passwordHash', async () => {
+      const origFindMany = prisma.tenant.findMany;
+      const origFindUnique = prisma.tenant.findUnique;
+
+      try {
+        let businessesQueryArgs: any = null;
+        (prisma as any).tenant.findMany = async (args: any) => {
+          businessesQueryArgs = args;
+          return [];
+        };
+
+        let businessByIdQueryArgs: any = null;
+        (prisma as any).tenant.findUnique = async (args: any) => {
+          businessByIdQueryArgs = args;
+          return {
+            id: 'tenant-1',
+            name: 'Test Shop',
+            memberships: [],
+          };
+        };
+
+        const res = {
+          status: () => res,
+          json: () => res,
+        } as unknown as Response;
+
+        await PlatformController.getBusinesses({} as Request, res, () => {});
+        assert.deepStrictEqual(businessesQueryArgs?.include?.memberships?.include?.user?.select, {
+          id: true,
+          email: true,
+          role: true,
+          isActive: true,
+          createdAt: true,
+        });
+
+        await PlatformController.getBusinessById({ params: { id: 'tenant-1' } } as unknown as Request, res, () => {});
+        assert.deepStrictEqual(businessByIdQueryArgs?.include?.memberships?.include?.user?.select, {
+          id: true,
+          email: true,
+          role: true,
+          isActive: true,
+          createdAt: true,
+          customerProfile: true,
+          barberProfile: true,
+        });
+      } finally {
+        (prisma as any).tenant.findMany = origFindMany;
+        (prisma as any).tenant.findUnique = origFindUnique;
+      }
     });
   });
 

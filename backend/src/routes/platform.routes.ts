@@ -18,6 +18,7 @@ router.patch('/businesses/:id', PlatformController.updateBusiness);
 router.post('/businesses/:id/suspend', PlatformController.suspendBusiness);
 router.post('/businesses/:id/activate', PlatformController.activateBusiness);
 router.post('/businesses/:id/archive', PlatformController.archiveBusiness);
+router.post('/businesses/:id/change-plan', PlatformController.changeTenantPlan);
 
 // Users across platform
 router.get('/users', PlatformController.getUsers);

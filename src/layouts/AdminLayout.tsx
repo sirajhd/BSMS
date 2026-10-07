@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 
 export const AdminLayout: React.FC = () => {
-  const { user, profile, logout, isSuperAdmin } = useAuth();
+  const { profile, logout, isSuperAdmin } = useAuth();
   const { tenant } = useTenant();
   const navigate = useNavigate();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -32,7 +32,7 @@ export const AdminLayout: React.FC = () => {
   const adminName =
     profile && 'fullName' in profile && profile.fullName
       ? profile.fullName
-      : user?.email?.split('@')[0] || 'Administrator';
+      : 'Shop Manager';
 
   const shopName = tenant?.name || 'Crown & Blade';
 
@@ -51,13 +51,19 @@ export const AdminLayout: React.FC = () => {
       {/* Desktop Sidebar */}
       <aside className="hidden md:flex flex-col w-64 border-r border-neutral-800 bg-neutral-900/90 shrink-0">
         <div className="p-5 border-b border-neutral-800 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center shrink-0">
-            <Scissors className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-xl bg-amber-600/20 text-amber-500 border border-amber-600/30 flex items-center justify-center shrink-0 overflow-hidden">
+            {tenant?.logo ? (
+              <img src={tenant.logo} alt={shopName} className="w-full h-full object-cover" />
+            ) : (
+              <Scissors className="w-5 h-5" />
+            )}
           </div>
           <div className="min-w-0">
-            <span className="font-extrabold text-base tracking-tight block truncate">{shopName}</span>
+            <span className="font-extrabold text-sm tracking-tight block truncate text-neutral-100">
+              {shopName}
+            </span>
             <span className="text-[10px] text-amber-500 font-bold uppercase tracking-wider block -mt-0.5">
-              {tenant?.slug ? `${tenant.slug}.bsms.com` : 'Shop Management'}
+              Workspace Admin
             </span>
           </div>
         </div>
@@ -100,9 +106,7 @@ export const AdminLayout: React.FC = () => {
             </div>
             <div className="min-w-0">
               <span className="text-xs font-bold text-neutral-200 block truncate">{adminName}</span>
-              <span className="text-[10px] text-amber-500 font-semibold block uppercase">
-                {user?.role || 'Shop Owner'}
-              </span>
+              <span className="text-[10px] text-neutral-500 block truncate">Owner / Manager</span>
             </div>
           </div>
           <button
@@ -157,7 +161,8 @@ export const AdminLayout: React.FC = () => {
           {isSuperAdmin && (
             <Link
               to="/platform/dashboard"
-              className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-bold text-amber-400 bg-amber-500/10"
+              onClick={() => setMobileSidebarOpen(false)}
+              className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20"
             >
               <span>Platform Super Admin</span>
               <ExternalLink className="w-3.5 h-3.5" />
