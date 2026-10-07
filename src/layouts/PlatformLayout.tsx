@@ -11,7 +11,6 @@ import {
   Menu,
   X,
   Sparkles,
-  ExternalLink,
 } from 'lucide-react';
 
 export const PlatformLayout: React.FC = () => {
@@ -21,7 +20,7 @@ export const PlatformLayout: React.FC = () => {
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate('/login', { replace: true, state: {} });
   };
 
   const navItems = [
@@ -110,14 +109,6 @@ export const PlatformLayout: React.FC = () => {
               </span>
             </div>
           </div>
-
-          <button
-            onClick={() => navigate('/admin/dashboard')}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-slate-400 hover:text-amber-300 hover:bg-slate-800 transition"
-          >
-            <span>Switch to Demo Shop</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </button>
 
           <button
             onClick={handleLogout}

@@ -22,7 +22,7 @@ export const BarberLayout: React.FC = () => {
 
   const handleSignOut = () => {
     logout();
-    navigate('/login', { replace: true });
+    navigate('/login', { replace: true, state: {} });
   };
 
   const barberName =

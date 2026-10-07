@@ -7,6 +7,53 @@ import { Input } from '../../components/common/Input';
 import { Card } from '../../components/common/Card';
 import { Eye, EyeOff, Lock, Mail, Scissors, AlertCircle, ShieldCheck } from 'lucide-react';
 
+import type { User } from '../../types';
+
+const getRoleDefaultDashboard = (user?: User | null): string => {
+  if (!user) return '/login';
+  const role = user.role;
+  const platformRole = user.platformRole;
+
+  if (platformRole === 'SUPER_ADMIN' || role === 'SUPER_ADMIN') {
+    return '/platform/dashboard';
+  }
+  if (role === 'SHOP_OWNER' || role === 'MANAGER' || role === 'ADMIN') {
+    return '/admin/dashboard';
+  }
+  if (role === 'BARBER') {
+    return '/barber/dashboard';
+  }
+  if (role === 'CUSTOMER') {
+    return '/customer/dashboard';
+  }
+  return '/login';
+};
+
+const isRouteAllowedForRole = (pathname: string, user?: User | null): boolean => {
+  if (!user || !pathname || typeof pathname !== 'string') return false;
+  const role = user.role;
+  const platformRole = user.platformRole;
+
+  // Never redirect to auth or root pages
+  if (pathname === '/' || pathname === '/login' || pathname === '/register') {
+    return false;
+  }
+
+  if (platformRole === 'SUPER_ADMIN' || role === 'SUPER_ADMIN') {
+    return pathname.startsWith('/platform') || pathname.startsWith('/super-admin');
+  }
+  if (role === 'SHOP_OWNER' || role === 'MANAGER' || role === 'ADMIN') {
+    return pathname.startsWith('/admin');
+  }
+  if (role === 'BARBER') {
+    return pathname.startsWith('/barber');
+  }
+  if (role === 'CUSTOMER') {
+    return pathname.startsWith('/customer');
+  }
+  return false;
+};
+
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -19,7 +66,13 @@ export const LoginPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname;
+  const rawFrom = (location.state as any)?.from;
+  const fromPath =
+    typeof rawFrom === 'string'
+      ? rawFrom
+      : rawFrom && typeof rawFrom.pathname === 'string'
+      ? rawFrom.pathname
+      : null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,23 +92,12 @@ export const LoginPage: React.FC = () => {
       return;
     }
 
-    // Role-aware redirection
-    if (from) {
-      navigate(from, { replace: true });
+    // Role-aware redirection: only honor 'from' if it is valid for the authenticated user's role
+    const loggedUser = result.user;
+    if (fromPath && isRouteAllowedForRole(fromPath, loggedUser)) {
+      navigate(fromPath, { replace: true });
     } else {
-      const loggedUser = result.user;
-      const role = loggedUser?.role;
-      const platformRole = loggedUser?.platformRole;
-
-      if (platformRole === 'SUPER_ADMIN' || role === 'SUPER_ADMIN') {
-        navigate('/platform/dashboard', { replace: true });
-      } else if (role === 'SHOP_OWNER' || role === 'MANAGER' || role === 'ADMIN') {
-        navigate('/admin/dashboard', { replace: true });
-      } else if (role === 'BARBER') {
-        navigate('/barber/dashboard', { replace: true });
-      } else {
-        navigate('/customer/dashboard', { replace: true });
-      }
+      navigate(getRoleDefaultDashboard(loggedUser), { replace: true });
     }
   };
 

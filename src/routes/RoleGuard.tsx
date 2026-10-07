@@ -9,7 +9,7 @@ export interface RoleGuardProps {
 }
 
 export const RoleGuard: React.FC<RoleGuardProps> = ({ allowedRoles, children }) => {
-  const { user, isLoading, hasRole, isSuperAdmin } = useAuth();
+  const { user, isLoading, hasRole } = useAuth();
 
   if (isLoading) {
     return (
@@ -23,15 +23,12 @@ export const RoleGuard: React.FC<RoleGuardProps> = ({ allowedRoles, children }) 
     return <Navigate to="/login" replace />;
   }
 
-  // Super Admins have universal clearance
-  if (isSuperAdmin) {
-    return <>{children}</>;
-  }
-
   if (!hasRole(...allowedRoles)) {
+    if (user.role === 'SUPER_ADMIN' || user.platformRole === 'SUPER_ADMIN') {
+      return <Navigate to="/platform/dashboard" replace />;
+    }
+
     switch (user.role) {
-      case 'SUPER_ADMIN':
-        return <Navigate to="/platform/dashboard" replace />;
       case 'SHOP_OWNER':
       case 'MANAGER':
       case 'ADMIN':

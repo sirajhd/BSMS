@@ -87,6 +87,19 @@ export const platformApi = {
     return apiClient<Subscription[]>('/platform/subscriptions');
   },
 
+  changeBusinessPlan: async (
+    id: string,
+    planSlug: string
+  ): Promise<{ subscription: Subscription; message?: string }> => {
+    return apiClient<{ subscription: Subscription; message?: string }>(
+      `/platform/businesses/${id}/change-plan`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ planSlug }),
+      }
+    );
+  },
+
   getAuditLogs: async (): Promise<AuditLog[]> => {
     return apiClient<AuditLog[]>('/platform/audit-logs');
   },

@@ -18,7 +18,17 @@ export const PlatformGuard: React.FC<{ children: React.ReactNode }> = ({ childre
   }
 
   if (!isSuperAdmin) {
-    return <Navigate to="/admin/dashboard" replace />;
+    switch (user.role) {
+      case 'BARBER':
+        return <Navigate to="/barber/dashboard" replace />;
+      case 'CUSTOMER':
+        return <Navigate to="/customer/dashboard" replace />;
+      case 'SHOP_OWNER':
+      case 'MANAGER':
+      case 'ADMIN':
+      default:
+        return <Navigate to="/admin/dashboard" replace />;
+    }
   }
 
   return <>{children}</>;

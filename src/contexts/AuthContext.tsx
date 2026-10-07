@@ -162,6 +162,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setProfile(null);
     setToken(null);
     localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem('bsms_active_tenant_slug');
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.clear();
+      }
+    } catch {
+      // Ignore storage restrictions
+    }
   };
 
   const refreshUser = async () => {
@@ -190,15 +198,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const hasRole = (...roles: Role[]): boolean => {
     if (!user) return false;
-    if (isSuperAdmin) return true;
 
     // Normalizing legacy ADMIN to include SHOP_OWNER
     let allowed = [...roles];
     if (roles.includes('ADMIN')) {
-      allowed.push('SUPER_ADMIN', 'SHOP_OWNER');
+      allowed.push('SHOP_OWNER');
     }
 
-    return allowed.includes(user.role) || (user.platformRole ? allowed.includes(user.platformRole) : false);
+    const effectiveRole = user.role;
+    const platformRole = user.platformRole;
+
+    return (
+      allowed.includes(effectiveRole) ||
+      (platformRole ? allowed.includes(platformRole) : false)
+    );
   };
 
   return (
