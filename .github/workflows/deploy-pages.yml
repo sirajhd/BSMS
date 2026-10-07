@@ -1,0 +1,60 @@
+warning: in the working copy of '.github/workflows/deploy-pages.yml', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/.github/workflows/deploy-pages.yml b/.github/workflows/deploy-pages.yml[m
+[1mnew file mode 100644[m
+[1mindex 0000000..72ebde2[m
+[1m--- /dev/null[m
+[1m+++ b/.github/workflows/deploy-pages.yml[m
+[36m@@ -0,0 +1,53 @@[m
+[32m+[m[32mname: Deploy Frontend to GitHub Pages[m
+[32m+[m
+[32m+[m[32mon:[m
+[32m+[m[32m  push:[m
+[32m+[m[32m    branches:[m
+[32m+[m[32m      - main[m
+[32m+[m[32m  workflow_dispatch:[m
+[32m+[m
+[32m+[m[32mpermissions:[m
+[32m+[m[32m  contents: read[m
+[32m+[m[32m  pages: write[m
+[32m+[m[32m  id-token: write[m
+[32m+[m
+[32m+[m[32mconcurrency:[m
+[32m+[m[32m  group: pages[m
+[32m+[m[32m  cancel-in-progress: true[m
+[32m+[m
+[32m+[m[32mjobs:[m
+[32m+[m[32m  build:[m
+[32m+[m[32m    runs-on: ubuntu-latest[m
+[32m+[m
+[32m+[m[32m    steps:[m
+[32m+[m[32m      - name: Checkout[m
+[32m+[m[32m        uses: actions/checkout@v4[m
+[32m+[m
+[32m+[m[32m      - name: Setup Node.js[m
+[32m+[m[32m        uses: actions/setup-node@v4[m
+[32m+[m[32m        with:[m
+[32m+[m[32m          node-version: 22[m
+[32m+[m[32m          cache: npm[m
+[32m+[m
+[32m+[m[32m      - name: Install dependencies[m
+[32m+[m[32m        run: npm ci[m
+[32m+[m
+[32m+[m[32m      - name: Build frontend for GitHub Pages[m
+[32m+[m[32m        run: npm run build -- --mode github-pages[m
+[32m+[m
+[32m+[m[32m      - name: Upload Pages artifact[m
+[32m+[m[32m        uses: actions/upload-pages-artifact@v3[m
+[32m+[m[32m        with:[m
+[32m+[m[32m          path: ./dist[m
+[32m+[m
+[32m+[m[32m  deploy:[m
+[32m+[m[32m    environment:[m
+[32m+[m[32m      name: github-pages[m
+[32m+[m[32m      url: ${{ steps.deployment.outputs.page_url }}[m
+[32m+[m[32m    runs-on: ubuntu-latest[m
+[32m+[m[32m    needs: build[m
+[32m+[m
+[32m+[m[32m    steps:[m
+[32m+[m[32m      - name: Deploy to GitHub Pages[m
+[32m+[m[32m        id: deployment[m
+[32m+[m[32m        uses: actions/deploy-pages@v4[m
